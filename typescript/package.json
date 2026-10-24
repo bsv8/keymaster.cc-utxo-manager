@@ -1,0 +1,11 @@
+{
+  "name": "keymaster-utxo-manager",
+  "version": "0.1.0",
+  "description": "Deterministic UTXO manager kernel + trusted submit orchestration (utm/1). No dependencies.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "license": "MIT"
+}
