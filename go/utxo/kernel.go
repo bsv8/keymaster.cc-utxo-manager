@@ -1859,6 +1859,46 @@ func (k *FundingKernel) AbortUnbroadcast(allocationID string) error {
 	return nil
 }
 
+// RetireForumProtocolAllocation explicitly discards a host-proven retired forum
+// allocation, including signed/unknown exacts. Never use for ordinary cancellation.
+// Observed spent inputs remain spent.
+func (k *FundingKernel) RetireForumProtocolAllocation(allocationID string) error {
+	if err := k.assertFundsNotFrozen("retire a forum protocol allocation"); err != nil {
+		return err
+	}
+	id, err := checkID(allocationID)
+	if err != nil {
+		return err
+	}
+	record, ok := k.allocations[id]
+	if !ok {
+		return fail(ErrAllocationUnknown, "allocation not found")
+	}
+	if record.ProtocolBinding == nil {
+		return fail(ErrAllocationState, "forum retirement requires a protocol allocation")
+	}
+	for _, key := range record.Inputs {
+		if row, ok := k.utxos[key]; ok && row.OccupiedBy != nil && *row.OccupiedBy == id && row.SpentBy == nil {
+			row.OccupiedBy = nil
+		}
+	}
+	kept := k.outbox[:0]
+	for _, entry := range k.outbox {
+		if entry.AllocationID == nil || *entry.AllocationID != id {
+			kept = append(kept, entry)
+		}
+	}
+	k.outbox = kept
+	for key, signature := range k.externalSignatures {
+		if signature.AllocationID == id {
+			delete(k.externalSignatures, key)
+		}
+	}
+	delete(k.allocations, id)
+	k.localRev++
+	return nil
+}
+
 // CancelUnstarted releases a held allocation only after a trusted execution
 // journal proved that no signature was ever started. It refuses signed or
 // attempted allocations.
