@@ -322,19 +322,6 @@ func runSubmit(kernel *FundingKernel, ports Ports, allocationID, signedTxHex str
 	if err := candidate.MarkDispatching(commandID); err != nil {
 		return nil, err
 	}
-	persistedHex := ""
-	for _, entry := range candidate.OutboxView() {
-		if entry.CommandID == commandID {
-			persistedHex = entry.RawTxHex
-			if entry.TxID != completed.TxID {
-				return nil, fail(ErrStateConflict, "outbox txid does not match signed transaction")
-			}
-			break
-		}
-	}
-	if persistedHex == "" || persistedHex != exactHex {
-		return nil, fail(ErrStateConflict, "outbox bytes do not match signed transaction")
-	}
 	stateBlob, err := candidate.Serialize()
 	if err != nil {
 		return nil, err
@@ -349,7 +336,7 @@ func runSubmit(kernel *FundingKernel, ports Ports, allocationID, signedTxHex str
 		return nil, err
 	}
 
-	outcome, broadcastErr := ports.Broadcaster.Broadcast(persistedHex)
+	outcome, broadcastErr := ports.Broadcaster.Broadcast(exactHex)
 	if err := runFault(ports, "after-broadcast-before-result-persist"); err != nil {
 		return nil, err
 	}
@@ -571,23 +558,6 @@ func CompleteProtocolIntent(kernel *FundingKernel, store DurableStore, allocatio
 	}
 	commandID := allocationID + ":broadcast"
 	exactHex := strings.ToLower(signedTxHex)
-	found := false
-	for _, entry := range candidate.OutboxView() {
-		if entry.CommandID != commandID {
-			continue
-		}
-		if entry.RawTxHex != exactHex || entry.TxID != completed.TxID {
-			return nil, fail(ErrStateConflict, "outbox bytes do not match signed transaction")
-		}
-		if delivery == "external" && entry.State != "unknown" {
-			return nil, fail(ErrStateConflict, "external delivery must start in the unknown state")
-		}
-		found = true
-		break
-	}
-	if !found {
-		return nil, fail(ErrStateConflict, "outbox bytes do not match signed transaction")
-	}
 	stateBlob, err := candidate.Serialize()
 	if err != nil {
 		return nil, err

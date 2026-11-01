@@ -183,19 +183,11 @@ func (k *FundingKernel) ResolveInputObservations(commandID string, observations 
 	for _, fact := range observations {
 		index, exists := positions[fact.Outpoint]
 		_, duplicate := supplied[fact.Outpoint]
-		if !exists || duplicate || (fact.Status != "spent" && fact.Status != "unspent" && fact.Status != "unknown") {
-			return nil, fail(ErrPolicyDenied, "invalid input observation set")
+		if !exists || duplicate {
+			return nil, fail(ErrPolicyDenied, "input observation does not match the responsible inputs")
 		}
-		if fact.Status == "spent" {
-			canonical, err := CheckTxid(fact.TxID)
-			if err != nil || canonical != fact.TxID || fact.Vin == nil || fact.Confirmed == nil {
-				return nil, fail(ErrPolicyDenied, "invalid spender observation")
-			}
-			if fact.TxID == entry.TxID && *fact.Vin != index {
-				return nil, fail(ErrPolicyDenied, "self spender vin mismatch")
-			}
-		} else if fact.TxID != "" || fact.Vin != nil || fact.Confirmed != nil {
-			return nil, fail(ErrPolicyDenied, "non-spent observation carries spender")
+		if fact.Status == "spent" && fact.TxID == entry.TxID && (fact.Vin == nil || *fact.Vin != index) {
+			return nil, fail(ErrPolicyDenied, "self spender vin mismatch")
 		}
 		supplied[fact.Outpoint] = fact
 	}

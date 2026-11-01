@@ -25,6 +25,11 @@ profile.cov
 go.work
 go.work.sum
 
+# TypeScript build/dependencies
+node_modules/
+dist/
+*.tgz
+
 # env file
 .env
 

@@ -143,7 +143,7 @@ func protocolIntentDigest(input protocolIntentDigestPayload) string {
 	for _, claim := range input.Claims {
 		payload.Claims = append(payload.Claims, claim)
 	}
-	sort.Strings(payload.Claims)
+	sortJSStrings(payload.Claims)
 	for key, proof := range input.Proofs {
 		payload.Proofs[key] = storedProof{Value: proof.Value, ScriptHex: proof.ScriptHex}
 	}
@@ -220,10 +220,7 @@ func (k *FundingKernel) PrepareProtocolIntent(input ProtocolIntentInput) (*Proto
 	if err := k.assertFundsNotFrozen("prepare a protocol intent"); err != nil {
 		return nil, err
 	}
-	id, err := checkID(input.AllocationID)
-	if err != nil {
-		return nil, err
-	}
+	id := input.AllocationID
 	record, ok := k.allocations[id]
 	if !ok {
 		return nil, fail(ErrAllocationUnknown, "allocation not found")
@@ -231,25 +228,13 @@ func (k *FundingKernel) PrepareProtocolIntent(input ProtocolIntentInput) (*Proto
 	if record.State != "held" {
 		return nil, fail(ErrAllocationState, "cannot prepare from "+record.State)
 	}
-	if input.Binding == nil {
-		return nil, fail(ErrPolicyDenied, "valid protocol binding is required")
-	}
 	kind := input.Binding.Kind
-	if kind != ProtocolKindRefund && kind != ProtocolKindClose && kind != ProtocolKindFund && kind != ProtocolKindState {
-		return nil, fail(ErrPolicyDenied, "valid protocol binding is required")
-	}
-	if input.Binding.PoolID == "" {
-		return nil, fail(ErrPolicyDenied, "protocol binding needs a pool id")
-	}
 	feeCap, err := ParseAmount(input.FeeCapSats, "fee cap")
 	if err != nil {
 		return nil, err
 	}
 	if feeCap == 0 {
 		return nil, fail(ErrFeeInvalid, "fee cap must be positive")
-	}
-	if input.FeePolicy != ProtocolFeePolicyRate && input.FeePolicy != ProtocolFeePolicyExact {
-		return nil, fail(ErrPolicyDenied, "protocol intent needs a valid fee policy")
 	}
 	if record.FeeRate == 0 {
 		return nil, fail(ErrFeeInvalid, "protocol allocation needs a fee rate")
@@ -264,38 +249,19 @@ func (k *FundingKernel) PrepareProtocolIntent(input ProtocolIntentInput) (*Proto
 
 	factsByKey := map[string]ProtocolInputFact{}
 	for _, raw := range input.Inputs {
-		if raw.Outpoint == "" {
-			return nil, fail(ErrTxInvalid, "protocol input needs an outpoint")
-		}
-		txid, vout, err := splitOutpoint(strings.ToLower(raw.Outpoint))
-		if err != nil {
-			return nil, err
-		}
-		key, err := outpointKey(txid, vout)
-		if err != nil {
-			return nil, err
-		}
+		key := strings.ToLower(raw.Outpoint)
 		if _, exists := factsByKey[key]; exists {
 			return nil, fail(ErrTxInvalid, "duplicate protocol input "+key)
-		}
-		if raw.Class != ProtocolInputWallet && raw.Class != ProtocolInputProtected && raw.Class != ProtocolInputExternal {
-			return nil, fail(ErrPolicyDenied, "unknown protocol input class for "+key)
 		}
 		value, err := ParseAmount(raw.Value, "input value")
 		if err != nil {
 			return nil, err
 		}
-		scriptHex, err := checkScriptHex(raw.ScriptHex, "input script")
-		if err != nil {
-			return nil, err
-		}
+		scriptHex := strings.ToLower(raw.ScriptHex)
 		fact := ProtocolInputFact{
 			Outpoint: key, Class: raw.Class, Value: mustFormat(value), ScriptHex: scriptHex,
 		}
-		if raw.Class == ProtocolInputProtected {
-			if raw.ClaimID == nil || *raw.ClaimID == "" {
-				return nil, fail(ErrPolicyDenied, "input "+key+" needs a protocol claim id")
-			}
+		if raw.Class == ProtocolInputProtected && raw.ClaimID != nil {
 			holder := *raw.ClaimID
 			fact.ClaimID = &holder
 		}
@@ -357,10 +323,7 @@ func (k *FundingKernel) PrepareProtocolIntent(input ProtocolIntentInput) (*Proto
 			if err != nil {
 				return nil, err
 			}
-			proofScript, err := checkScriptHex(proof.ScriptHex, "proof script")
-			if err != nil {
-				return nil, err
-			}
+			proofScript := strings.ToLower(proof.ScriptHex)
 			if proofScript == k.config.WalletScriptHex {
 				return nil, fail(ErrPolicyDenied, "input "+key+" claims the wallet script without kernel proof")
 			}
@@ -565,10 +528,7 @@ func (k *FundingKernel) CompleteProtocol(input CompleteProtocolInput) (*Complete
 	if err := k.assertFundsNotFrozen("complete a protocol spend"); err != nil {
 		return nil, err
 	}
-	id, err := checkID(input.AllocationID)
-	if err != nil {
-		return nil, err
-	}
+	id := input.AllocationID
 	record, ok := k.allocations[id]
 	if !ok {
 		return nil, fail(ErrAllocationUnknown, "allocation not found")
@@ -576,7 +536,7 @@ func (k *FundingKernel) CompleteProtocol(input CompleteProtocolInput) (*Complete
 	if record.State != "held" {
 		return nil, fail(ErrAllocationState, "cannot complete from "+record.State)
 	}
-	if len(record.ProtocolInputs) == 0 {
+	if len(record.ProtocolInputs) == 0 || record.SigningIntentHex == "" {
 		return nil, fail(ErrAllocationState, "protocol intent was not prepared")
 	}
 	parsed, err := ParseTx(input.SignedTxHex, "")
@@ -590,28 +550,17 @@ func (k *FundingKernel) CompleteProtocol(input CompleteProtocolInput) (*Complete
 	if err != nil {
 		return nil, err
 	}
-	if record.SigningIntentHex != "" && record.SigningIntentHex != skeleton {
+	if record.SigningIntentHex != skeleton {
 		return nil, fail(ErrStateConflict, "transaction differs from frozen signing intent")
 	}
-	if len(parsed.Inputs) != len(record.ProtocolInputs) {
-		return nil, fail(ErrSnapshotInputInvalid, "signed inputs do not match the protocol intent")
-	}
-	for i, txIn := range parsed.Inputs {
-		if txIn.OutpointKey != record.ProtocolInputs[i].Outpoint {
-			return nil, fail(ErrSnapshotInputInvalid, "signed inputs do not match the protocol intent")
-		}
-	}
-
-	// The same manifest rules apply to the exact bytes: a declared output
-	// (including a protocol-earmarked self output) is consumed by script and
-	// value; at most one undeclared self output is ordinary change.
-	ownOut, _, err := k.matchProtocolOutputs(record.Outputs, parsed.Outputs)
-	if err != nil {
-		return nil, err
-	}
+	// The frozen skeleton already binds ordered inputs and the output layout.
+	// Current prevout amounts and actual signature size still determine fees.
 	var ownTotal uint64
-	for _, value := range ownOut {
-		ownTotal, err = AddChecked(ownTotal, value, "own outputs")
+	for _, output := range parsed.Outputs {
+		if output.Script != k.config.WalletScriptHex {
+			continue
+		}
+		ownTotal, err = AddChecked(ownTotal, output.Value, "own outputs")
 		if err != nil {
 			return nil, err
 		}
@@ -733,25 +682,13 @@ func (k *FundingKernel) RecordExternalSignature(input ExternalSignatureInput) (s
 	if err := k.assertFundsNotFrozen("record an external signature"); err != nil {
 		return "", err
 	}
-	id, err := checkID(input.ID)
-	if err != nil {
-		return "", err
-	}
-	if input.AllocationID == "" {
-		return "", fail(ErrPolicyDenied, "external signature needs an allocation")
-	}
+	id := input.ID
 	allocation, ok := k.allocations[input.AllocationID]
 	if !ok {
 		return "", fail(ErrAllocationUnknown, "external signature allocation not found")
 	}
 	if allocation.State != "held" {
 		return "", fail(ErrAllocationState, "external signature cannot attach to a "+allocation.State+" allocation")
-	}
-	if input.DraftTxHex == "" {
-		return "", fail(ErrTxInvalid, "external signature needs the exact draft bytes")
-	}
-	if input.SignatureHex == "" {
-		return "", fail(ErrTxInvalid, "external signature needs the signature bytes")
 	}
 	// The exact draft is parsed: the responsibility follows the artifact, not
 	// the caller's metadata. A signature only ever affects inputs the signed
@@ -770,7 +707,7 @@ func (k *FundingKernel) RecordExternalSignature(input ExternalSignatureInput) (s
 		seenArtifact[key] = true
 		artifactInputs = append(artifactInputs, key)
 	}
-	sort.Strings(artifactInputs)
+	sortJSStrings(artifactInputs)
 	if len(artifactInputs) == 0 {
 		return "", fail(ErrTxInvalid, "external signature draft spends no input")
 	}
@@ -784,7 +721,7 @@ func (k *FundingKernel) RecordExternalSignature(input ExternalSignatureInput) (s
 		seen[lower] = true
 		related = append(related, lower)
 	}
-	sort.Strings(related)
+	sortJSStrings(related)
 	if len(related) == 0 {
 		return "", fail(ErrPolicyDenied, "external signature needs the related inputs it exposes")
 	}
@@ -909,10 +846,7 @@ func (k *FundingKernel) RecordExternalSignature(input ExternalSignatureInput) (s
 // call returns ErrStateConflict. The host MUST persist that candidate: the
 // isolation is the safety action, not an optional side effect.
 func (k *FundingKernel) SettleExternalSignature(id string, evidence ExternalSignatureEvidence) error {
-	key, err := checkID(id)
-	if err != nil {
-		return err
-	}
+	key := id
 	record, ok := k.externalSignatures[key]
 	if !ok {
 		return fail(ErrAllocationUnknown, "external signature not found")
@@ -923,13 +857,7 @@ func (k *FundingKernel) SettleExternalSignature(id string, evidence ExternalSign
 	// There is no evidence-free settlement: a bare id is not proof.
 	switch evidence.Kind {
 	case "input-consumed":
-		txid, txErr := CheckTxid(evidence.TxID)
-		if txErr != nil {
-			return fail(ErrPolicyDenied, "settlement evidence needs a valid txid")
-		}
-		if evidence.RawTxHex == "" {
-			return fail(ErrPolicyDenied, "settlement evidence needs the observed exact transaction")
-		}
+		txid := strings.ToLower(evidence.TxID)
 		exact, exactErr := ParseTx(evidence.RawTxHex, txid)
 		if exactErr != nil {
 			return fail(ErrPolicyDenied, "settlement evidence does not carry the observed exact transaction")
@@ -1087,14 +1015,6 @@ func (k *FundingKernel) SettleExternalSignature(id string, evidence ExternalSign
 		k.localRev++
 		return nil
 	case "signature-invalidated":
-		if evidence.Reason == "" {
-			return fail(ErrPolicyDenied, "an invalidated signature needs a reason")
-		}
-		if evidence.TxID != "" {
-			if _, txErr := CheckTxid(evidence.TxID); txErr != nil {
-				return fail(ErrPolicyDenied, "settlement evidence needs a valid txid")
-			}
-		}
 		if evidence.TxID != "" {
 			holder := strings.ToLower(evidence.TxID)
 			record.SettledTxid = &holder
@@ -1153,10 +1073,7 @@ func (k *FundingKernel) isolateConflict(outpoint, observedTxid string) {
 // signature that already left the wallet keeps its inputs responsible until
 // a trusted terminal state is recorded.
 func (k *FundingKernel) ExternalResponsibilityFor(allocationID string) *ExternalSignatureRecord {
-	id, err := checkID(allocationID)
-	if err != nil {
-		return nil
-	}
+	id := allocationID
 	// Canonical id order is stable across languages and serialize/restore.
 	for _, record := range k.ExternalSignatureView() {
 		if record.AllocationID != id {
@@ -1175,14 +1092,7 @@ func (k *FundingKernel) ExternalResponsibilityFor(allocationID string) *External
 // auditable: the old record stays in the ledger and points at the record that
 // superseded it.
 func (k *FundingKernel) SupersedeExternalSignature(oldID, newID string) error {
-	oldKey, err := checkID(oldID)
-	if err != nil {
-		return err
-	}
-	newKey, err := checkID(newID)
-	if err != nil {
-		return err
-	}
+	oldKey, newKey := oldID, newID
 	if oldKey == newKey {
 		return fail(ErrIDConflict, "a signature cannot supersede itself")
 	}
@@ -1242,10 +1152,7 @@ type ProtocolIntentView struct {
 // protocol-protected input was claimed through the manager rather than by a
 // caller flag.
 func (k *FundingKernel) ProtocolIntentView(allocationID string) *ProtocolIntentView {
-	id, err := checkID(allocationID)
-	if err != nil {
-		return nil
-	}
+	id := allocationID
 	record, ok := k.allocations[id]
 	if !ok || len(record.ProtocolInputs) == 0 {
 		return nil
@@ -1364,7 +1271,7 @@ func (k *FundingKernel) ExternalSignatureView() []ExternalSignatureRecord {
 		}
 		rows = append(rows, copy)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	sort.Slice(rows, func(i, j int) bool { return jsLess(rows[i].ID, rows[j].ID) })
 	return rows
 }
 

@@ -68,17 +68,17 @@ type serialConfig struct {
 }
 
 type serialState struct {
-	Version            string                      `json:"version"`
-	Scope              Scope                       `json:"scope"`
-	Config             serialConfig                `json:"config"`
-	Generation         int64                       `json:"generation"`
-	WocRevision        int64                       `json:"wocRevision"`
-	LocalRev           int64                       `json:"localRevision"`
-	Utxos              map[string]serialUtxo       `json:"utxos"`
-	Allocations        map[string]serialAllocation `json:"allocations"`
-	Outbox             []OutboxEntry               `json:"outbox"`
-	ExternalSignatures []ExternalSignatureRecord   `json:"externalSignatures"`
-	FundsFrozen        *string                     `json:"fundsFrozen,omitempty"`
+	Version            string                     `json:"version"`
+	Scope              Scope                      `json:"scope"`
+	Config             serialConfig               `json:"config"`
+	Generation         int64                      `json:"generation"`
+	WocRevision        int64                      `json:"wocRevision"`
+	LocalRev           int64                      `json:"localRevision"`
+	Utxos              jsObject[serialUtxo]       `json:"utxos"`
+	Allocations        jsObject[serialAllocation] `json:"allocations"`
+	Outbox             []OutboxEntry              `json:"outbox"`
+	ExternalSignatures []ExternalSignatureRecord  `json:"externalSignatures"`
+	FundsFrozen        *string                    `json:"fundsFrozen,omitempty"`
 }
 
 func marshalCanonical(value interface{}) (string, error) {
@@ -88,7 +88,7 @@ func marshalCanonical(value interface{}) (string, error) {
 	if err := encoder.Encode(value); err != nil {
 		return "", err
 	}
-	return strings.TrimSuffix(buf.String(), "\n"), nil
+	return jsJSONSeparators(strings.TrimSuffix(buf.String(), "\n")), nil
 }
 
 // Serialize renders the canonical state JSON.
@@ -122,7 +122,7 @@ func (k *FundingKernel) Serialize() (string, error) {
 		state.ExternalSignatures = append(state.ExternalSignatures, copy)
 	}
 	sort.Slice(state.ExternalSignatures, func(i, j int) bool {
-		return state.ExternalSignatures[i].ID < state.ExternalSignatures[j].ID
+		return jsLess(state.ExternalSignatures[i].ID, state.ExternalSignatures[j].ID)
 	})
 	for key, row := range k.utxos {
 		sources := append([]string(nil), row.ProtectionSources...)
@@ -187,9 +187,20 @@ func Restore(blob string, scope Scope) (*FundingKernel, error) {
 	if state.Scope.Owner != scope.Owner || state.Scope.Network != scope.Network {
 		return nil, fail(ErrScopeMismatch, "snapshot scope does not match")
 	}
+	if state.Config.MaxUnconfirmedAncestors < 0 {
+		return nil, fail(ErrStateConflict, "invalid stored maxUnconfirmedAncestors")
+	}
+	script, err := checkScriptHex(state.Config.WalletScriptHex, "stored wallet script")
+	if err != nil {
+		return nil, err
+	}
+	dust, err := ParseAmount(state.Config.DustThresholdSats, "stored dust threshold")
+	if err != nil {
+		return nil, err
+	}
 	kernel, err := NewFundingKernel(scope, ManagerConfig{
-		WalletScriptHex:         state.Config.WalletScriptHex,
-		DustThresholdSats:       state.Config.DustThresholdSats,
+		WalletScriptHex:         script,
+		DustThresholdSats:       mustFormat(dust),
 		MaxUnconfirmedAncestors: state.Config.MaxUnconfirmedAncestors,
 	})
 	if err != nil {
@@ -409,7 +420,7 @@ func uniqueLowerSorted(values []string) []string {
 		seen[key] = true
 		out = append(out, key)
 	}
-	sort.Strings(out)
+	sortJSStrings(out)
 	return out
 }
 

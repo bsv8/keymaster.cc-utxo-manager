@@ -3,7 +3,6 @@ package utxo
 import (
 	"encoding/binary"
 	"encoding/hex"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -464,6 +463,6 @@ func AssembleSigned(unsignedTxHex string, scriptSigs []string) (string, error) {
 // SortedOutpointKeys sorts outpoint keys deterministically.
 func SortedOutpointKeys(keys []string) []string {
 	out := append([]string{}, keys...)
-	sort.Strings(out)
+	sortJSStrings(out)
 	return out
 }

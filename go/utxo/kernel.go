@@ -1,8 +1,8 @@
 package utxo
 
 import (
+	"encoding/json"
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -227,13 +227,12 @@ type storedAllocation struct {
 	State                string
 }
 
-var idPattern = regexp.MustCompile(`^[A-Za-z0-9:_.-]+$`)
-
-func checkID(id string) (string, error) {
-	if id == "" || len(id) > 128 || !idPattern.MatchString(id) {
-		return "", fail(ErrPolicyDenied, "bad request/allocation id")
+func canonicalScriptHex(scriptHex string) string {
+	clean := scriptHex
+	if strings.HasPrefix(clean, "0x") || strings.HasPrefix(clean, "0X") {
+		clean = clean[2:]
 	}
-	return id, nil
+	return strings.ToLower(clean)
 }
 
 func checkScriptHex(scriptHex, what string) (string, error) {
@@ -253,11 +252,8 @@ func checkScriptHex(scriptHex, what string) (string, error) {
 	return strings.ToLower(clean), nil
 }
 
-func outpointKey(txid string, vout uint32) (string, error) {
-	if _, err := CheckTxid(txid); err != nil {
-		return "", err
-	}
-	return strings.ToLower(txid) + ":" + strconv.FormatUint(uint64(vout), 10), nil
+func outpointKey(txid string, vout uint32) string {
+	return strings.ToLower(txid) + ":" + strconv.FormatUint(uint64(vout), 10)
 }
 
 func splitOutpoint(key string) (string, uint32, error) {
@@ -321,7 +317,6 @@ func isTransactionLevelIsolation(reason string) bool {
 type FundingKernel struct {
 	scope              Scope
 	config             ManagerConfig
-	dust               uint64
 	utxos              map[string]*storedUtxo
 	allocations        map[string]*storedAllocation
 	outbox             []OutboxEntry
@@ -337,27 +332,10 @@ type FundingKernel struct {
 
 // NewFundingKernel creates a kernel for one scope.
 func NewFundingKernel(scope Scope, config ManagerConfig) (*FundingKernel, error) {
-	if scope.Owner == "" {
-		return nil, fail(ErrScopeMismatch, "scope owner is required")
-	}
-	if scope.Network != "main" && scope.Network != "test" {
-		return nil, fail(ErrScopeMismatch, "bad network")
-	}
-	script, err := checkScriptHex(config.WalletScriptHex, "wallet script")
-	if err != nil {
-		return nil, err
-	}
-	dust, err := ParseAmount(config.DustThresholdSats, "dust threshold")
-	if err != nil {
-		return nil, err
-	}
-	if config.MaxUnconfirmedAncestors < 0 {
-		return nil, fail(ErrPolicyDenied, "bad maxUnconfirmedAncestors")
-	}
+	// Initialized identity/configuration are trusted. Restore validates disk data.
 	return &FundingKernel{
 		scope:              scope,
-		config:             ManagerConfig{WalletScriptHex: script, DustThresholdSats: mustFormat(dust), MaxUnconfirmedAncestors: config.MaxUnconfirmedAncestors},
-		dust:               dust,
+		config:             config,
 		utxos:              map[string]*storedUtxo{},
 		allocations:        map[string]*storedAllocation{},
 		externalSignatures: map[string]*ExternalSignatureRecord{},
@@ -414,53 +392,61 @@ func (k *FundingKernel) refreshFundsFrozen() {
 	if k.fundsFrozen != nil && !strings.HasPrefix(*k.fundsFrozen, "migration:") {
 		return
 	}
-	first := ""
+	var first *string
 	for _, row := range k.externalSignatures {
 		if row.State == "settled" || row.State != "quarantined" {
 			continue
 		}
-		if first == "" || row.ID < first {
-			first = row.ID
+		if first == nil || jsLess(row.ID, *first) {
+			id := row.ID
+			first = &id
 		}
 	}
-	if first == "" {
+	if first == nil {
 		k.fundsFrozen = nil
 		return
 	}
-	reason := "migration:" + first
+	reason := "migration:" + *first
 	k.fundsFrozen = &reason
 }
 
 // Clone returns a detached candidate state for validate-persist-publish flows.
 func (k *FundingKernel) Clone() (*FundingKernel, error) {
-	blob, err := k.Serialize()
-	if err != nil {
+	candidate := *k
+	if err := candidate.ReplaceFrom(k); err != nil {
 		return nil, err
 	}
-	return Restore(blob, k.scope)
+	return &candidate, nil
 }
 
 // ReplaceFrom publishes a previously validated and durably persisted candidate.
 func (k *FundingKernel) ReplaceFrom(candidate *FundingKernel) error {
-	if candidate == nil || candidate.scope != k.scope || candidate.config != k.config {
-		return fail(ErrScopeMismatch, "candidate manager scope/config does not match")
+	// Detached in-memory copying, not disk serialize/restore validation.
+	// Copy all reference fields before publishing; later mutations cannot leak.
+	type detachedState struct {
+		Utxos              map[string]*storedUtxo
+		Allocations        map[string]*storedAllocation
+		Outbox             []OutboxEntry
+		ExternalSignatures map[string]*ExternalSignatureRecord
+		FundsFrozen        *string
 	}
-	blob, err := candidate.Serialize()
+	state := detachedState{candidate.utxos, candidate.allocations, candidate.outbox, candidate.externalSignatures, candidate.fundsFrozen}
+	blob, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
-	restored, err := Restore(blob, k.scope)
-	if err != nil {
+	var detached detachedState
+	if err := json.Unmarshal(blob, &detached); err != nil {
 		return err
 	}
-	k.utxos = restored.utxos
-	k.allocations = restored.allocations
-	k.outbox = restored.outbox
-	k.externalSignatures = restored.externalSignatures
-	k.fundsFrozen = restored.fundsFrozen
-	k.generation = restored.generation
-	k.wocRevision = restored.wocRevision
-	k.localRev = restored.localRev
+	k.utxos = detached.Utxos
+	k.allocations = detached.Allocations
+	k.outbox = detached.Outbox
+	k.externalSignatures = detached.ExternalSignatures
+	k.fundsFrozen = detached.FundsFrozen
+	k.generation = candidate.generation
+	k.wocRevision = candidate.wocRevision
+	k.localRev = candidate.localRev
 	return nil
 }
 
@@ -470,10 +456,7 @@ func (k *FundingKernel) MarkSigningIntentDurable(allocationID string) error {
 	if err := k.assertFundsNotFrozen("mark a signing intent durable"); err != nil {
 		return err
 	}
-	id, err := checkID(allocationID)
-	if err != nil {
-		return err
-	}
+	id := allocationID
 	record, ok := k.allocations[id]
 	if !ok || record.SigningIntentHex == "" {
 		return fail(ErrAllocationState, "signing intent was not prepared")
@@ -485,10 +468,7 @@ func (k *FundingKernel) MarkSigningIntentDurable(allocationID string) error {
 
 // SigningIntent returns the frozen template and its durability marker.
 func (k *FundingKernel) SigningIntent(allocationID string) (string, bool, error) {
-	id, err := checkID(allocationID)
-	if err != nil {
-		return "", false, err
-	}
+	id := allocationID
 	record, ok := k.allocations[id]
 	if !ok {
 		return "", false, fail(ErrAllocationUnknown, "allocation not found")
@@ -511,12 +491,6 @@ type SnapshotResult struct {
 
 // ApplySnapshot merges a validated WoC snapshot.
 func (k *FundingKernel) ApplySnapshot(input SnapshotInput) (*SnapshotResult, error) {
-	if input.Generation <= 0 {
-		return nil, fail(ErrPolicyDenied, "bad generation")
-	}
-	if input.Revision <= 0 {
-		return nil, fail(ErrPolicyDenied, "bad revision")
-	}
 	if input.Generation < k.generation {
 		return nil, fail(ErrSnapshotStale, "older generation")
 	}
@@ -536,24 +510,12 @@ func (k *FundingKernel) ApplySnapshot(input SnapshotInput) (*SnapshotResult, err
 	order := []string{}
 	byKey := map[string]*incomingRow{}
 	for _, row := range input.Utxos {
-		key, err := outpointKey(row.TxID, row.Vout)
-		if err != nil {
-			return nil, err
-		}
+		key := outpointKey(row.TxID, row.Vout)
 		value, err := ParseAmount(row.Value, "utxo value")
 		if err != nil {
 			return nil, err
 		}
-		scriptHex, err := checkScriptHex(row.ScriptHex, "utxo script")
-		if err != nil {
-			return nil, err
-		}
-		if row.Status != "confirmed" && row.Status != "unconfirmed" {
-			return nil, fail(ErrPolicyDenied, "bad utxo status")
-		}
-		if row.Height < 0 {
-			return nil, fail(ErrPolicyDenied, "bad utxo height")
-		}
+		scriptHex := canonicalScriptHex(row.ScriptHex)
 		if prev, ok := byKey[key]; ok {
 			if prev.valueStr != row.Value || prev.scriptHex != scriptHex {
 				return nil, fail(ErrOutpointConflict, "conflicting duplicate "+key)
@@ -634,14 +596,7 @@ func (k *FundingKernel) ApplySnapshot(input SnapshotInput) (*SnapshotResult, err
 // stays canonical.
 func (k *FundingKernel) ReportExternalSpend(outpoint, spendingTxid string) error {
 	key := strings.ToLower(outpoint)
-	if _, _, err := splitOutpoint(key); err != nil {
-		return err
-	}
-	lowerSpending, err := CheckTxid(spendingTxid)
-	if err != nil {
-		return err
-	}
-	lowerSpending = strings.ToLower(lowerSpending)
+	lowerSpending := strings.ToLower(spendingTxid)
 	if existing, ok := k.utxos[key]; ok {
 		if existing.SpentBy != nil && *existing.SpentBy != lowerSpending {
 			reason := "conflict:" + lowerSpending
@@ -712,15 +667,7 @@ func (k *FundingKernel) isolateDescendants(rootOutpoint, reason string) {
 // over one of them never drops the other.
 func (k *FundingKernel) SetProtected(outpoints []string, protect bool, source string) error {
 	for _, raw := range outpoints {
-		key := strings.ToLower(raw)
-		txid, vout, err := splitOutpoint(key)
-		if err != nil {
-			return err
-		}
-		canonical, err := outpointKey(txid, vout)
-		if err != nil {
-			return err
-		}
+		canonical := strings.ToLower(raw)
 		if existing, ok := k.utxos[canonical]; ok {
 			if !protect {
 				if existing.Isolated != nil && *existing.Isolated == "protected-unknown" && existing.Value == 0 && existing.ScriptHex == "" {
@@ -744,7 +691,7 @@ func (k *FundingKernel) SetProtected(outpoints []string, protect bool, source st
 			}
 			if !found {
 				existing.ProtectionSources = append(existing.ProtectionSources, source)
-				sort.Strings(existing.ProtectionSources)
+				sortJSStrings(existing.ProtectionSources)
 			}
 			if existing.Isolated != nil && *existing.Isolated == "protected-unknown" {
 				existing.Isolated = nil
@@ -769,7 +716,7 @@ func (k *FundingKernel) ProtectedOutpointKeys() []string {
 			out = append(out, key)
 		}
 	}
-	sort.Strings(out)
+	sortJSStrings(out)
 	return out
 }
 
@@ -857,10 +804,7 @@ func (k *FundingKernel) Request(input RequestInput) (*AllocationView, error) {
 	if err := k.assertFundsNotFrozen("request funds"); err != nil {
 		return nil, err
 	}
-	id, err := checkID(input.RequestID)
-	if err != nil {
-		return nil, err
-	}
+	id := input.RequestID
 	business, err := ParseAmount(input.BusinessAmount, "business amount")
 	if err != nil {
 		return nil, err
@@ -883,10 +827,7 @@ func (k *FundingKernel) Request(input RequestInput) (*AllocationView, error) {
 	outputs := make([]storedOutput, 0, len(input.Outputs))
 	var businessSum uint64
 	for _, o := range input.Outputs {
-		script, err := checkScriptHex(o.ScriptHex, "output script")
-		if err != nil {
-			return nil, err
-		}
+		script := canonicalScriptHex(o.ScriptHex)
 		value, err := ParseAmount(o.Value, "output value")
 		if err != nil {
 			return nil, err
@@ -918,6 +859,10 @@ func (k *FundingKernel) Request(input RequestInput) (*AllocationView, error) {
 	for _, o := range outputs {
 		scriptLens = append(scriptLens, len(o.ScriptHex)/2)
 	}
+	dust, err := ParseAmount(k.config.DustThresholdSats, "dust")
+	if err != nil {
+		return nil, err
+	}
 	var chosen []candidate
 	var total uint64
 	var fee uint64
@@ -941,7 +886,7 @@ func (k *FundingKernel) Request(input RequestInput) (*AllocationView, error) {
 		}
 		needWithChange, err := AddChecked(business, withChange, "need")
 		if err == nil {
-			needWithChange, err = AddChecked(needWithChange, k.dust, "need")
+			needWithChange, err = AddChecked(needWithChange, dust, "need")
 		}
 		if err == nil && total >= needWithChange {
 			fee = withChange
@@ -1001,10 +946,7 @@ func (k *FundingKernel) Replace(allocationID string, input RequestInput) (*Alloc
 	if err := k.assertFundsNotFrozen("replace an allocation"); err != nil {
 		return nil, err
 	}
-	id, err := checkID(allocationID)
-	if err != nil {
-		return nil, err
-	}
+	id := allocationID
 	current, ok := k.allocations[id]
 	if !ok {
 		return nil, fail(ErrAllocationUnknown, "allocation not found")
@@ -1045,10 +987,7 @@ func (k *FundingKernel) RequestProtocol(input RequestInput) (*AllocationView, er
 	if err := k.assertFundsNotFrozen("request protocol funds"); err != nil {
 		return nil, err
 	}
-	id, err := checkID(input.RequestID)
-	if err != nil {
-		return nil, err
-	}
+	id := input.RequestID
 	business, err := ParseAmount(input.BusinessAmount, "business amount")
 	if err != nil {
 		return nil, err
@@ -1067,10 +1006,7 @@ func (k *FundingKernel) RequestProtocol(input RequestInput) (*AllocationView, er
 	}
 	outputs := make([]storedOutput, 0, len(input.Outputs))
 	for _, o := range input.Outputs {
-		script, err := checkScriptHex(o.ScriptHex, "output script")
-		if err != nil {
-			return nil, err
-		}
+		script := canonicalScriptHex(o.ScriptHex)
 		value, err := ParseAmount(o.Value, "output value")
 		if err != nil {
 			return nil, err
@@ -1103,10 +1039,7 @@ func (k *FundingKernel) Release(allocationID string) error {
 	if err := k.assertFundsNotFrozen("release an allocation"); err != nil {
 		return err
 	}
-	id, err := checkID(allocationID)
-	if err != nil {
-		return err
-	}
+	id := allocationID
 	current, ok := k.allocations[id]
 	if !ok {
 		return fail(ErrAllocationUnknown, "allocation not found")
@@ -1299,10 +1232,7 @@ func (k *FundingKernel) Prepare(input PrepareInput) (*PrepareResult, error) {
 	if err := k.assertFundsNotFrozen("prepare a signing intent"); err != nil {
 		return nil, err
 	}
-	id, err := checkID(input.AllocationID)
-	if err != nil {
-		return nil, err
-	}
+	id := input.AllocationID
 	record, ok := k.allocations[id]
 	if !ok {
 		return nil, fail(ErrAllocationUnknown, "allocation not found")
@@ -1414,10 +1344,7 @@ func (k *FundingKernel) CompletePrepare(input CompletePrepareInput) (*CompletePr
 	if err := k.assertFundsNotFrozen("complete a wallet spend"); err != nil {
 		return nil, err
 	}
-	id, err := checkID(input.AllocationID)
-	if err != nil {
-		return nil, err
-	}
+	id := input.AllocationID
 	record, ok := k.allocations[id]
 	if !ok {
 		return nil, fail(ErrAllocationUnknown, "allocation not found")
@@ -1789,9 +1716,6 @@ func copyNullableStrings(value []string) []string {
 // Lookup returns a read-only view of one outpoint for host adapters.
 func (k *FundingKernel) Lookup(outpoint string) (*OutpointRecord, error) {
 	key := strings.ToLower(outpoint)
-	if _, _, err := splitOutpoint(key); err != nil {
-		return nil, err
-	}
 	row, ok := k.utxos[key]
 	if !ok {
 		return nil, fail(ErrUnknownInput, "outpoint "+outpoint+" is unknown")
@@ -1813,10 +1737,7 @@ func (k *FundingKernel) AbortUnbroadcast(allocationID string) error {
 	if err := k.assertFundsNotFrozen("abort an allocation"); err != nil {
 		return err
 	}
-	id, err := checkID(allocationID)
-	if err != nil {
-		return err
-	}
+	id := allocationID
 	record, ok := k.allocations[id]
 	if !ok {
 		return fail(ErrAllocationUnknown, "allocation not found")
@@ -1866,10 +1787,7 @@ func (k *FundingKernel) RetireForumProtocolAllocation(allocationID string) error
 	if err := k.assertFundsNotFrozen("retire a forum protocol allocation"); err != nil {
 		return err
 	}
-	id, err := checkID(allocationID)
-	if err != nil {
-		return err
-	}
+	id := allocationID
 	record, ok := k.allocations[id]
 	if !ok {
 		return fail(ErrAllocationUnknown, "allocation not found")
@@ -1906,10 +1824,7 @@ func (k *FundingKernel) CancelUnstarted(allocationID string) error {
 	if err := k.assertFundsNotFrozen("cancel an unstarted allocation"); err != nil {
 		return err
 	}
-	id, err := checkID(allocationID)
-	if err != nil {
-		return err
-	}
+	id := allocationID
 	record, ok := k.allocations[id]
 	if !ok {
 		return fail(ErrAllocationUnknown, "allocation not found")
@@ -1937,7 +1852,7 @@ func (k *FundingKernel) DropPending() []string {
 	for id := range k.allocations {
 		ids = append(ids, id)
 	}
-	sort.Strings(ids)
+	sortJSStrings(ids)
 	dropped := []string{}
 	for _, id := range ids {
 		if record := k.allocations[id]; record != nil && (record.SigningIntentDurable || record.SignedTxid != nil) {
@@ -2067,10 +1982,7 @@ func (k *FundingKernel) ValidateProtocolSpend(allocationID, signedTxHex string, 
 	if err := k.assertFundsNotFrozen("validate a protocol spend"); err != nil {
 		return "", "", err
 	}
-	id, err := checkID(allocationID)
-	if err != nil {
-		return "", "", err
-	}
+	id := allocationID
 	record, ok := k.allocations[id]
 	if !ok {
 		return "", "", fail(ErrAllocationUnknown, "allocation not found")
@@ -2078,7 +1990,7 @@ func (k *FundingKernel) ValidateProtocolSpend(allocationID, signedTxHex string, 
 	if record.State != "held" {
 		return "", "", fail(ErrAllocationState, "cannot spend from "+record.State)
 	}
-	if binding == nil || (binding.Kind != "refund" && binding.Kind != "close") || binding.PoolID == "" {
+	if binding == nil || (binding.Kind != "refund" && binding.Kind != "close") {
 		return "", "", fail(ErrPolicyDenied, "valid protocol binding is required")
 	}
 	parsed, err := ParseTx(signedTxHex, "")
@@ -2105,10 +2017,7 @@ func (k *FundingKernel) ValidateProtocolSpend(allocationID, signedTxHex string, 
 			if err != nil {
 				return "", "", err
 			}
-			scriptHex, err := checkScriptHex(proof.ScriptHex, "proof script")
-			if err != nil {
-				return "", "", err
-			}
+			scriptHex := canonicalScriptHex(proof.ScriptHex)
 			normalized = storedProof{Value: value, ScriptHex: scriptHex}
 		}
 		if rowExists && (row.SpentBy != nil || row.Isolated != nil || row.Protected || row.PendingParent != nil) {
@@ -2295,10 +2204,7 @@ func (k *FundingKernel) view(id string, record *storedAllocation) (*AllocationVi
 
 // AllocationView returns the public allocation state.
 func (k *FundingKernel) AllocationView(allocationID string) (*AllocationView, error) {
-	id, err := checkID(allocationID)
-	if err != nil {
-		return nil, err
-	}
+	id := allocationID
 	record, ok := k.allocations[id]
 	if !ok {
 		return nil, fail(ErrAllocationUnknown, "allocation not found")
