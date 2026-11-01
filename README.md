@@ -3,21 +3,21 @@
 UTXO manager（`utm/1`）。本轮以 cc 内最新 TS 实现迁回本仓；cc 不再保留内置核心，消费本仓构建包。资金选币、占用和 exact/unknown 责任由唯一内核管理，宿主不在签名或广播前另设逐输入 spent 查询门禁；显式历史对账和未知输入结论仍通过观察端口处理。
 
 - TS 唯一源码：`typescript/src/index.ts`；包名 `keymaster-utxo-manager`。
-- Go 唯一源码：`go/utxo`，module `github.com/bsv8/keymaster.cc-utxo-manager`；CLI 使用 `github.com/bsv8/keymaster.cc-utxo-manager/utxo`，不保留内部副本。Go 按最新 TS 语义同步，不能维护独立业务或格式规则。
+- Go 唯一源码：根目录 `utxo/`，`go.mod` 位于仓库根目录，module `github.com/bsv8/keymaster.cc-utxo-manager`；CLI 使用 `github.com/bsv8/keymaster.cc-utxo-manager/utxo`，不保留内部副本。Go 按最新 TS 语义同步，不能维护独立业务或格式规则。
 - 共同内核：`FundingKernel`；由宿主保证单写者和持久化原子提交。
 - 宿主负责 HTTP、文件/进程锁、身份授权与签名器、网页/设备交互、CLI 参数和定时器。核心不启动后台查询或网络服务。
 
 ## TS 构建与消费
 
-在 `typescript/` 运行 `pnpm install && pnpm build`，生成 `dist/`；包只导出编译后的 JS 和声明文件，无运行时依赖。cc 当前通过 `file:` 依赖安装构建产物，修改组件后须重新构建并重新安装依赖；不通过源码 alias 或内部副本接入。本轮未发布 npm。
+在 `typescript/` 运行 `pnpm install && pnpm build`，生成 `dist/`；包只导出编译后的 JS 和声明文件，无运行时依赖。cc 使用已发布的精确 npm 版本 `keymaster-utxo-manager@0.1.0`，不通过源码 alias、本地 `file:` 依赖或内部副本接入。Go 目录整理不改变 npm 包。
 
 工程仓 `node test/shared/component-packages.mjs` 验证打包后在临时目录独立安装和导入。组件测试和语料仍在工程仓 `test/shared/utxo-manager/`，不复制到产品目录。
 
 ## Go 构建与双语言回归
 
-在 `go/` 运行 `go build ./...`，只依赖 Go 标准库，不需要 TS/Node。CLI 当前通过 `go.mod` 的本地 `replace` 消费本模块，未发布新版本。
+在仓库根目录运行 `go build ./...`，只依赖 Go 标准库，不需要 TS/Node。Go module 位于仓库根目录，使用根标签 `v0.1.1` 发布，不使用 `go/v...`；消费路径为 `github.com/bsv8/keymaster.cc-utxo-manager/utxo`。
 
-工程仓统一入口 `npm run test:components:parity` 校验唯一源码、CLI 实际模块依赖、UTXO 逐步输出/错误码/状态哈希、字节一致快照与双向恢复续跑、随机轨迹与独立资金 oracle，以及调度器的完整状态/命令/视图/错误和跨语言恢复。具体命令见工程仓 `test/shared/README.md`。不同语言的内部调用同样受信，磁盘恢复同样检查损坏；不保留 Go 专属格式契约。TS 规则变化必须同步 Go 并补共享向量；有限测试通过不等于所有输入已被穷尽证明。
+工程仓统一入口 `npm run test:components:parity` 校验开发源码的 UTXO 逐步输出/错误码/状态哈希、字节一致快照与双向恢复续跑、随机轨迹与独立资金 oracle，以及调度器的完整状态/命令/视图/错误和跨语言恢复。具体命令见工程仓 `test/shared/README.md`。不同语言的内部调用同样受信，磁盘恢复同样检查损坏；不保留 Go 专属格式契约。TS 规则变化必须同步 Go 并补共享向量；有限测试通过不等于所有输入已被穷尽证明。
 
 ## 受信编排 API 对应
 
