@@ -1,6 +1,7 @@
 // Deterministic funding kernel (utm/1). Pure: no clock, network, keys or
 // filesystem. One instance serves one scope (owner + network); hosts create
 // one manager per scope. All money uses canonical decimal strings / BigInt.
+import { traceKernel } from "./debug.js";
 import { CONTRACT_VERSION, UtmError } from "./contract.js";
 import { estimateFeeSats, formatAmount, parseAmount, parseFeeRate, sumChecked, addChecked, MAX_MONEY } from "./amounts.js";
 import { buildUnsigned, checkTxid, estimateSignedSize, parseTx, type ParsedTx } from "./txcodec.js";
@@ -2865,3 +2866,12 @@ export class FundingKernel {
     return calcTxid(new TextEncoder().encode(this.serialize()));
   }
 }
+
+// Diagnostics observe detached facts only; serialization/output is sanitized by
+// debugLog and is evaluated only when enabled. No wrappers on read-only helpers.
+traceKernel(FundingKernel.prototype, [
+  "applySnapshot", "reportExternalSpend", "setProtected", "request", "replace", "requestProtocol", "release",
+  "prepare", "markSigningIntentDurable", "completePrepare", "prepareProtocolIntent", "completeProtocol",
+  "recordExternalSignature", "settleExternalSignature", "supersedeExternalSignature", "markDispatching",
+  "broadcastResult", "resolveInputObservations", "abortUnbroadcast", "cancelUnstarted", "importUnknown", "reconcile",
+], kernel => JSON.parse((kernel as FundingKernel).serialize()));

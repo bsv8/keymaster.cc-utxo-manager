@@ -217,6 +217,7 @@ func (k *FundingKernel) matchProtocolOutputs(declared []storedOutput, outputs []
 // PrepareProtocolIntent freezes a protocol-bound unsigned transaction before
 // any signer runs. Unclassified, mismatched or over-cap inputs fail closed.
 func (k *FundingKernel) PrepareProtocolIntent(input ProtocolIntentInput) (*ProtocolIntentResult, error) {
+	defer k.debugTrace("prepareProtocolIntent", input)()
 	if err := k.assertFundsNotFrozen("prepare a protocol intent"); err != nil {
 		return nil, err
 	}
@@ -525,6 +526,7 @@ func (k *FundingKernel) PrepareProtocolIntent(input ProtocolIntentInput) (*Proto
 // starts in the unknown state: the wallet's own provider proves nothing
 // about whether an outside party already broadcast the bytes.
 func (k *FundingKernel) CompleteProtocol(input CompleteProtocolInput) (*CompleteProtocolResult, error) {
+	defer k.debugTrace("completeProtocol", input)()
 	if err := k.assertFundsNotFrozen("complete a protocol spend"); err != nil {
 		return nil, err
 	}
@@ -679,6 +681,7 @@ func (k *FundingKernel) CompleteProtocol(input CompleteProtocolInput) (*Complete
 // inputs: a signature that is not attached to held funds cannot create (or
 // clear) a money responsibility.
 func (k *FundingKernel) RecordExternalSignature(input ExternalSignatureInput) (string, error) {
+	defer k.debugTrace("recordExternalSignature", input)()
 	if err := k.assertFundsNotFrozen("record an external signature"); err != nil {
 		return "", err
 	}
@@ -846,6 +849,7 @@ func (k *FundingKernel) RecordExternalSignature(input ExternalSignatureInput) (s
 // call returns ErrStateConflict. The host MUST persist that candidate: the
 // isolation is the safety action, not an optional side effect.
 func (k *FundingKernel) SettleExternalSignature(id string, evidence ExternalSignatureEvidence) error {
+	defer k.debugTrace("settleExternalSignature", map[string]any{"id": id, "evidence": evidence})()
 	key := id
 	record, ok := k.externalSignatures[key]
 	if !ok {
@@ -1092,6 +1096,7 @@ func (k *FundingKernel) ExternalResponsibilityFor(allocationID string) *External
 // auditable: the old record stays in the ledger and points at the record that
 // superseded it.
 func (k *FundingKernel) SupersedeExternalSignature(oldID, newID string) error {
+	defer k.debugTrace("supersedeExternalSignature", map[string]any{"oldId": oldID, "newId": newID})()
 	oldKey, newKey := oldID, newID
 	if oldKey == newKey {
 		return fail(ErrIDConflict, "a signature cannot supersede itself")

@@ -75,5 +75,6 @@ func CodeOf(err error) string {
 }
 
 func fail(code, message string) *Error {
+	debugLog("operation.rejected", func() any { return map[string]any{"code": code, "reason": message} })
 	return &Error{Code: code, Message: message}
 }

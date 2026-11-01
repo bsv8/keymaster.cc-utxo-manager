@@ -326,9 +326,15 @@ func runSubmit(kernel *FundingKernel, ports Ports, allocationID, signedTxHex str
 	if err != nil {
 		return nil, err
 	}
+	debugLog("dispatch.persist.start", func() any {
+		return map[string]any{"allocationId": allocationID, "commandId": commandID, "txid": completed.TxID}
+	})
 	if err := ports.Store.SaveDispatch(commandID, completed.TxID, exactHex, stateBlob); err != nil {
 		return nil, err
 	}
+	debugLog("dispatch.persist.finish", func() any {
+		return map[string]any{"allocationId": allocationID, "commandId": commandID, "txid": completed.TxID}
+	})
 	if err := kernel.ReplaceFrom(candidate); err != nil {
 		return nil, err
 	}
@@ -336,7 +342,13 @@ func runSubmit(kernel *FundingKernel, ports Ports, allocationID, signedTxHex str
 		return nil, err
 	}
 
+	debugLog("broadcast.start", func() any {
+		return map[string]any{"allocationId": allocationID, "commandId": commandID, "txid": completed.TxID}
+	})
 	outcome, broadcastErr := ports.Broadcaster.Broadcast(exactHex)
+	debugLog("broadcast.finish", func() any {
+		return map[string]any{"allocationId": allocationID, "commandId": commandID, "txid": completed.TxID, "outcome": outcome, "transportError": broadcastErr != nil}
+	})
 	if err := runFault(ports, "after-broadcast-before-result-persist"); err != nil {
 		return nil, err
 	}

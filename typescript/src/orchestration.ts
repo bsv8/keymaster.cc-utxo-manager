@@ -5,6 +5,7 @@
 // then published to the live kernel. A durable dispatch state always precedes
 // network I/O. Unknown outcomes retain the same exact transaction and input
 // responsibility.
+import { debugLog } from "./debug.js";
 import { UtmError } from "./contract.js";
 import { checkTxid, parseTx } from "./txcodec.js";
 import { FundingKernel, type ProtocolIntentInput, type InputObservation, type InputConclusion } from "./kernel.js";
@@ -213,17 +214,21 @@ async function runSubmit(
   // One durable transaction: exact bytes + all kernel responsibility + the
   // dispatch intent. If it fails, the live held allocation remains occupied
   // and no provider call is made.
+  debugLog("dispatch.persist.start", () => ({ allocationId, commandId, txid: completed.txid }));
   await ports.store.saveDispatch(commandId, completed.txid, exactHex, candidate.serialize());
+  debugLog("dispatch.persist.finish", () => ({ allocationId, commandId, txid: completed.txid }));
   kernel.replaceFrom(candidate);
   await ports.fault?.("after-dispatch-persist-before-broadcast");
 
   let outcome: BroadcastOutcome | null = null;
   let transportError = false;
+  debugLog("broadcast.start", () => ({ allocationId, commandId, txid: completed.txid }));
   try {
     outcome = await ports.broadcaster.broadcast(exactHex);
   } catch {
     transportError = true;
   }
+  debugLog("broadcast.finish", () => ({ allocationId, commandId, txid: completed.txid, outcome, transportError }));
   await ports.fault?.("after-broadcast-before-result-persist");
 
   let delivery: SubmitResult["delivery"] = "unknown";

@@ -137,6 +137,7 @@ func (k *FundingKernel) validateInputConclusion(entry OutboxEntry) error {
 // publication. A foreign spender disproves this exact, but never frees unknown
 // inputs, protected funds or outstanding external signature responsibilities.
 func (k *FundingKernel) ResolveInputObservations(commandID string, observations []InputObservation) (*InputConclusion, error) {
+	defer k.debugTrace("resolveInputObservations", map[string]any{"commandId": commandID, "observations": observations})()
 	var entry *OutboxEntry
 	for i := range k.outbox {
 		if k.outbox[i].CommandID == commandID {

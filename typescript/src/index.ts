@@ -1,3 +1,5 @@
+export { setDebugSink, debugEnabled } from "./debug.js";
+export type { DebugEvent, DebugSink } from "./debug.js";
 // Public entry of keymaster-utxo-manager (utm/1).
 // Applications see: request / replace / release / prepare / submit / reconcile
 // plus views and persistence. Signing and broadcast stay behind host ports.

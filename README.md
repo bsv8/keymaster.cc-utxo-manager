@@ -19,6 +19,14 @@ UTXO manager（`utm/1`）。本轮以 cc 内最新 TS 实现迁回本仓；cc �
 
 工程仓统一入口 `npm run test:components:parity` 校验开发源码的 UTXO 逐步输出/错误码/状态哈希、字节一致快照与双向恢复续跑、随机轨迹与独立资金 oracle，以及调度器的完整状态/命令/视图/错误和跨语言恢复。具体命令见工程仓 `test/shared/README.md`。不同语言的内部调用同样受信，磁盘恢复同样检查损坏；不保留 Go 专属格式契约。TS 规则变化必须同步 Go 并补共享向量；有限测试通过不等于所有输入已被穷尽证明。
 
+## 可选诊断（当前源码）
+
+TS `setDebugSink(sink)` / `debugEnabled()`，Go `SetDebugSink(sink)` / `DebugEnabled()`；默认关闭，由宿主 dev 装配显式开启，不读取环境、不写文件、不依赖 BitFS。事件为 `{component, event, details}`，component=`utxo-manager`；时间戳/运行实例/序号由宿主日志出口补充，不进入业务状态。sink 必须快速返回、不重入业务；其异常被隔离。关闭时不构造状态摘要，开启时输出分离、脱敏的观察结果。
+
+`operation.start/finish` 覆盖快照、保护来源、选币/替换/释放、签名前意图、协议与外露签名、派发、广播结果、未知/输入对账等，包含输入与前后状态，可以追踪 allocation、outpoint、金额/费用、保护与未决责任。`operation.rejected` 包含业务错误原因；Go 的拒绝事件由契约错误入口记录，当前操作由相邻边界事件关联，finish 本身不表示操作成功。`dispatch.persist.start/finish` 与 `broadcast.start/finish` 区分持久化和外部派发，不把内核候选变化冒充落盘。
+
+日志禁止秘密、正文、原始交易、脚本、签名或预映像；二进制/原始材料只输出 byteLength，凭据字段隐藏。测试和长期结果保留在工程仓，日志不可用作资金事实或重放输入。
+
 ## 受信编排 API 对应
 
 | TypeScript | Go | 用途 |

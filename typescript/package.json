@@ -1,6 +1,6 @@
 {
   "name": "keymaster-utxo-manager",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Deterministic UTXO manager and trusted orchestration (utm/1). No runtime dependencies.",
   "type": "module",
   "main": "./dist/index.js",

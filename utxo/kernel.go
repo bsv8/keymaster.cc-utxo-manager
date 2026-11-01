@@ -453,6 +453,7 @@ func (k *FundingKernel) ReplaceFrom(candidate *FundingKernel) error {
 // MarkSigningIntentDurable records that a validated template was persisted
 // before the trusted signer was allowed to run.
 func (k *FundingKernel) MarkSigningIntentDurable(allocationID string) error {
+	defer k.debugTrace("markSigningIntentDurable", allocationID)()
 	if err := k.assertFundsNotFrozen("mark a signing intent durable"); err != nil {
 		return err
 	}
@@ -491,6 +492,7 @@ type SnapshotResult struct {
 
 // ApplySnapshot merges a validated WoC snapshot.
 func (k *FundingKernel) ApplySnapshot(input SnapshotInput) (*SnapshotResult, error) {
+	defer k.debugTrace("applySnapshot", input)()
 	if input.Generation < k.generation {
 		return nil, fail(ErrSnapshotStale, "older generation")
 	}
@@ -595,6 +597,7 @@ func (k *FundingKernel) ApplySnapshot(input SnapshotInput) (*SnapshotResult, err
 // throwing: a network fact is never a caller error. The first-seen spend
 // stays canonical.
 func (k *FundingKernel) ReportExternalSpend(outpoint, spendingTxid string) error {
+	defer k.debugTrace("reportExternalSpend", map[string]any{"outpoint": outpoint, "txid": spendingTxid})()
 	key := strings.ToLower(outpoint)
 	lowerSpending := strings.ToLower(spendingTxid)
 	if existing, ok := k.utxos[key]; ok {
@@ -666,6 +669,7 @@ func (k *FundingKernel) isolateDescendants(rootOutpoint, reason string) {
 // accumulate: an outpoint protected by two providers keeps both, so taking
 // over one of them never drops the other.
 func (k *FundingKernel) SetProtected(outpoints []string, protect bool, source string) error {
+	defer k.debugTrace("setProtected", map[string]any{"outpoints": outpoints, "protect": protect, "source": source})()
 	for _, raw := range outpoints {
 		canonical := strings.ToLower(raw)
 		if existing, ok := k.utxos[canonical]; ok {
@@ -801,6 +805,7 @@ func stableRequestHash(business, feeRate string, locktime uint32, outputs []Requ
 
 // Request allocates inputs for a business amount plus fee.
 func (k *FundingKernel) Request(input RequestInput) (*AllocationView, error) {
+	defer k.debugTrace("request", input)()
 	if err := k.assertFundsNotFrozen("request funds"); err != nil {
 		return nil, err
 	}
@@ -943,6 +948,7 @@ func (k *FundingKernel) Request(input RequestInput) (*AllocationView, error) {
 
 // Replace atomically swaps the occupation of a held, unsigned allocation.
 func (k *FundingKernel) Replace(allocationID string, input RequestInput) (*AllocationView, error) {
+	defer k.debugTrace("replace", map[string]any{"allocationId": allocationID, "input": input})()
 	if err := k.assertFundsNotFrozen("replace an allocation"); err != nil {
 		return nil, err
 	}
@@ -984,6 +990,7 @@ func (k *FundingKernel) Replace(allocationID string, input RequestInput) (*Alloc
 // inputs are validated and authorized at spend time by
 // ValidateProtocolSpend.
 func (k *FundingKernel) RequestProtocol(input RequestInput) (*AllocationView, error) {
+	defer k.debugTrace("requestProtocol", input)()
 	if err := k.assertFundsNotFrozen("request protocol funds"); err != nil {
 		return nil, err
 	}
@@ -1036,6 +1043,7 @@ func (k *FundingKernel) RequestProtocol(input RequestInput) (*AllocationView, er
 
 // Release frees an unsigned, undispatched held allocation.
 func (k *FundingKernel) Release(allocationID string) error {
+	defer k.debugTrace("release", allocationID)()
 	if err := k.assertFundsNotFrozen("release an allocation"); err != nil {
 		return err
 	}
@@ -1229,6 +1237,7 @@ func unsignedSkeleton(rawTxHex string) (string, error) {
 
 // Prepare validates the unsigned template against the allocation.
 func (k *FundingKernel) Prepare(input PrepareInput) (*PrepareResult, error) {
+	defer k.debugTrace("prepare", input)()
 	if err := k.assertFundsNotFrozen("prepare a signing intent"); err != nil {
 		return nil, err
 	}
@@ -1341,6 +1350,7 @@ type CompletePrepareResult struct {
 
 // CompletePrepare validates signed bytes and enqueues the broadcast command.
 func (k *FundingKernel) CompletePrepare(input CompletePrepareInput) (*CompletePrepareResult, error) {
+	defer k.debugTrace("completePrepare", input)()
 	if err := k.assertFundsNotFrozen("complete a wallet spend"); err != nil {
 		return nil, err
 	}
@@ -1436,6 +1446,7 @@ type BroadcastReport struct {
 // recovers as unknown (query or replay the SAME exact tx), never as
 // droppable. Idempotent.
 func (k *FundingKernel) MarkDispatching(commandID string) error {
+	defer k.debugTrace("markDispatching", commandID)()
 	for i := range k.outbox {
 		if k.outbox[i].CommandID == commandID {
 			if k.outbox[i].Conclusion != nil {
@@ -1452,6 +1463,7 @@ func (k *FundingKernel) MarkDispatching(commandID string) error {
 }
 
 func (k *FundingKernel) BroadcastResult(commandID string, result BroadcastReport) error {
+	defer k.debugTrace("broadcastResult", map[string]any{"commandId": commandID, "result": result})()
 	var entry *OutboxEntry
 	for i := range k.outbox {
 		if k.outbox[i].CommandID == commandID {
@@ -1734,6 +1746,7 @@ func (k *FundingKernel) Lookup(outpoint string) (*OutpointRecord, error) {
 // for the same bytes, and marks the allocation aborted. Callers must
 // guarantee the bytes never left the host through another path.
 func (k *FundingKernel) AbortUnbroadcast(allocationID string) error {
+	defer k.debugTrace("abortUnbroadcast", allocationID)()
 	if err := k.assertFundsNotFrozen("abort an allocation"); err != nil {
 		return err
 	}
@@ -1821,6 +1834,7 @@ func (k *FundingKernel) RetireForumProtocolAllocation(allocationID string) error
 // journal proved that no signature was ever started. It refuses signed or
 // attempted allocations.
 func (k *FundingKernel) CancelUnstarted(allocationID string) error {
+	defer k.debugTrace("cancelUnstarted", allocationID)()
 	if err := k.assertFundsNotFrozen("cancel an unstarted allocation"); err != nil {
 		return err
 	}
@@ -1871,6 +1885,7 @@ func (k *FundingKernel) DropPending() []string {
 // are adopted but NOT selectable until the entry settles via
 // BroadcastResult/Reconcile.
 func (k *FundingKernel) ImportUnknown(txid, rawTxHex string) (string, error) {
+	defer k.debugTrace("importUnknown", map[string]any{"txid": txid, "rawTxHex": rawTxHex})()
 	canonical, err := CheckTxid(txid)
 	if err != nil {
 		return "", err
@@ -1936,6 +1951,7 @@ func (k *FundingKernel) ImportUnknown(txid, rawTxHex string) (string, error) {
 
 // Reconcile settles an unknown outbox entry against a chain observation.
 func (k *FundingKernel) Reconcile(commandID string, found bool, rawTxHex string) (string, error) {
+	defer k.debugTrace("reconcile", map[string]any{"commandId": commandID, "found": found, "rawTxHex": rawTxHex})()
 	var entry *OutboxEntry
 	for i := range k.outbox {
 		if k.outbox[i].CommandID == commandID {
