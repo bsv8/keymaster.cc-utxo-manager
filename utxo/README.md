@@ -24,4 +24,5 @@ all state; restart risks are intentionally unmanaged.
 
 Build: `go build ./...`. Uses only the standard library. TS and Go share the same
 allocation contract; tests and current docs live in the engineering repo. This
-new API is candidate source, not a claim that a matching release is published.
+memory-pool API is published at the root module tag `v0.2.0`; source/candidate
+checks do not substitute for public-release dependency checks.

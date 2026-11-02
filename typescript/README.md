@@ -29,5 +29,6 @@ Old WoC responses cannot revive allocated/used inputs. Local outputs survive WoC
 lag until first observed; later complete observations update chain-sourced funds.
 Discard the instance to discard all state. Restart risks are explicitly unmanaged.
 
-Build with `npm install && npm run build`. New API is candidate source until a
-matching release is published. Shared tests/docs belong to the engineering repo.
+Build with `npm install && npm run build`. The memory-pool API is published as
+`keymaster-utxo-manager@0.2.0`. Shared tests/docs belong to the engineering repo;
+source/candidate checks and public-release dependency checks are separate.
