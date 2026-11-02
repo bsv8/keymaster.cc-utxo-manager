@@ -16,19 +16,24 @@ const allocation = pool.request({
 });
 // Caller constructs, signs and submits using allocation.inputs.
 // Every successful submission (including already-known and protocol payouts):
-pool.acceptTransaction(successfulRawTxHex); // change is immediately allocatable
+pool.acceptTransaction({
+  txid: successfulTxid,
+  spentOutpoints: allocation.inputs,
+  outputs: [{ vout: changeVout, value: changeSats, scriptHex: walletScriptHex }],
+}); // caller supplies actual successful prevouts/outputs; change is immediately allocatable
 // Explicit transaction rejection: caller may pool.release(allocation.allocationId).
 // Unknown network result: do not release and do not inject unaccepted change.
 ```
 
 `allocate(id, outpoints)` atomically freezes caller-selected pool inputs.
-`spendableBalance`, `spendableOutpoints`, `lookup`, `allocationView` and
-`previousTransaction` are queries. Amounts use decimal strings; fees use sats/KB.
+`spendableBalance`, `spendableOutpoints`, `lookup` and `allocationView` are queries.
+The pool never accepts, parses or caches transaction bytes. Amounts use decimal strings; fees use sats/KB.
 
 Old WoC responses cannot revive allocated/used inputs. Local outputs survive WoC
 lag until first observed; later complete observations update chain-sourced funds.
 Discard the instance to discard all state. Restart risks are explicitly unmanaged.
 
 Build with `npm install && npm run build`. The memory-pool API is published as
-`keymaster-utxo-manager@0.2.0`. Shared tests/docs belong to the engineering repo;
+`keymaster-utxo-manager@0.2.0`; the structured success-input change above is
+source-only and not yet published. Shared tests/docs belong to the engineering repo;
 source/candidate checks and public-release dependency checks are separate.

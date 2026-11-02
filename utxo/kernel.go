@@ -28,6 +28,16 @@ type SnapshotInput struct {
 	Revision   int64          `json:"revision"`
 	Utxos      []SnapshotUtxo `json:"utxos"`
 }
+type AcceptedOutput struct {
+	Vout      uint32 `json:"vout"`
+	Value     string `json:"value"`
+	ScriptHex string `json:"scriptHex"`
+}
+type AcceptedTransaction struct {
+	TxID           string           `json:"txid"`
+	SpentOutpoints []string         `json:"spentOutpoints"`
+	Outputs        []AcceptedOutput `json:"outputs"`
+}
 type RequestOutput struct {
 	ScriptHex string `json:"scriptHex"`
 	Value     string `json:"value"`
@@ -63,13 +73,13 @@ type FundingKernel struct {
 	utxos       map[string]*PoolUtxo
 	allocations map[string]*AllocationView
 	unavailable map[string]bool
-	parents     map[string]string
+	accepted    map[string]bool
 	generation  int64
 	revision    int64
 }
 
 func NewFundingKernel(scope Scope, config ManagerConfig) (*FundingKernel, error) {
-	return &FundingKernel{scope: scope, config: config, utxos: map[string]*PoolUtxo{}, allocations: map[string]*AllocationView{}, unavailable: map[string]bool{}, parents: map[string]string{}}, nil
+	return &FundingKernel{scope: scope, config: config, utxos: map[string]*PoolUtxo{}, allocations: map[string]*AllocationView{}, unavailable: map[string]bool{}, accepted: map[string]bool{}}, nil
 }
 func poolKey(txid string, vout uint32) string {
 	return strings.ToLower(txid) + ":" + strconv.FormatUint(uint64(vout), 10)
@@ -251,19 +261,16 @@ func (k *FundingKernel) Release(id string) error {
 	return nil
 }
 
-// AcceptTransaction extracts own outputs from a caller-confirmed successful tx.
-// No signature, permission, result observation or mempool validation is performed.
-func (k *FundingKernel) AcceptTransaction(raw string) error {
-	defer k.debugTrace("acceptTransaction", map[string]any{"rawTxHex": raw})()
-	tx, err := ParseTx(raw, "")
-	if err != nil {
-		return err
-	}
-	if _, accepted := k.parents[tx.CanonicalTxID]; accepted {
+// AcceptTransaction applies trusted caller-confirmed successful prevouts and outputs.
+// No transaction bytes, parsing, signature or result validation lives here.
+func (k *FundingKernel) AcceptTransaction(tx AcceptedTransaction) error {
+	defer k.debugTrace("acceptTransaction", tx)()
+	txid := strings.ToLower(tx.TxID)
+	if k.accepted[txid] {
 		return nil
 	}
-	for _, input := range tx.Inputs {
-		key := poolKey(input.TxID, input.Vout)
+	for _, input := range tx.SpentOutpoints {
+		key := strings.ToLower(input)
 		k.unavailable[key] = true
 		if u := k.utxos[key]; u != nil {
 			u.Used = true
@@ -272,12 +279,12 @@ func (k *FundingKernel) AcceptTransaction(raw string) error {
 			}
 		}
 	}
-	k.parents[tx.CanonicalTxID] = raw
-	for index, output := range tx.Outputs {
-		if output.Script != k.config.WalletScriptHex || output.Value == 0 {
+	k.accepted[txid] = true
+	for _, output := range tx.Outputs {
+		if output.ScriptHex != k.config.WalletScriptHex || output.Value == "0" {
 			continue
 		}
-		key := poolKey(tx.CanonicalTxID, uint32(index))
+		key := poolKey(txid, output.Vout)
 		if k.unavailable[key] {
 			continue
 		}
@@ -288,12 +295,9 @@ func (k *FundingKernel) AcceptTransaction(raw string) error {
 			height = prior.Height
 			source = prior.Source
 		}
-		k.utxos[key] = &PoolUtxo{SnapshotUtxo: SnapshotUtxo{TxID: tx.CanonicalTxID, Vout: uint32(index), Value: mustFormat(output.Value), ScriptHex: output.Script, Status: status, Height: height}, Source: source}
+		k.utxos[key] = &PoolUtxo{SnapshotUtxo: SnapshotUtxo{TxID: txid, Vout: output.Vout, Value: output.Value, ScriptHex: output.ScriptHex, Status: status, Height: height}, Source: source}
 	}
 	return nil
-}
-func (k *FundingKernel) PreviousTransaction(txid string) string {
-	return k.parents[strings.ToLower(txid)]
 }
 func (k *FundingKernel) SpendableOutpoints() []string {
 	keys := []string{}

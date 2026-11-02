@@ -3,7 +3,7 @@
 import { UtmError } from "./contract.js";
 import { traceKernel } from "./debug.js";
 import { estimateFeeSats, parseAmount, parseFeeRate, addChecked } from "./amounts.js";
-import { estimateSignedSize, parseTx } from "./txcodec.js";
+import { estimateSignedSize } from "./txcodec.js";
 
 export interface Scope { owner: string; network: "main" | "test" }
 export interface ManagerConfig { walletScriptHex: string; dustThresholdSats: string }
@@ -12,6 +12,11 @@ export interface SnapshotUtxo {
   status: "confirmed" | "unconfirmed"; height: number;
 }
 export interface SnapshotInput { generation: number; revision: number; utxos: SnapshotUtxo[] }
+export interface AcceptedTransaction {
+  txid: string;
+  spentOutpoints: string[];
+  outputs: Array<{ vout: number; value: string; scriptHex: string }>;
+}
 export interface RequestInput {
   requestId: string; businessAmountSats: string; feeRateSatPerKb: string;
   outputs: Array<{ scriptHex: string; value: string }>;
@@ -28,7 +33,7 @@ export class FundingKernel {
   private allocations = new Map<string, AllocationView>();
   // Includes inputs absent from a later snapshot; stale WoC must not revive them.
   private unavailable = new Set<string>();
-  private parents = new Map<string, string>();
+  private accepted = new Set<string>();
   private generation = 0;
   private revision = 0;
   constructor(readonly scope: Scope, readonly config: ManagerConfig) {}
@@ -109,12 +114,12 @@ export class FundingKernel {
 
   /** Caller confirms successful submission. Every caller must invoke this for
    * every successful transaction, including protocol payouts and already-known.
-   * Parsing extracts inputs/own outputs; it is not signature or policy validation. */
-  acceptTransaction(rawTxHex: string): void {
-    const tx = parseTx(rawTxHex);
-    if (this.parents.has(tx.canonicalTxid)) return;
-    for (const input of tx.inputs) {
-      const key = keyOf(input); this.unavailable.add(key);
+   * The trusted caller supplies prevouts and outputs, never transaction bytes. */
+  acceptTransaction(tx: AcceptedTransaction): void {
+    const txid = tx.txid.toLowerCase();
+    if (this.accepted.has(txid)) return;
+    for (const input of tx.spentOutpoints) {
+      const key = input.toLowerCase(); this.unavailable.add(key);
       const row = this.utxos.get(key);
       if (row) {
         row.used = true;
@@ -124,17 +129,16 @@ export class FundingKernel {
         }
       }
     }
-    this.parents.set(tx.canonicalTxid, rawTxHex);
-    tx.outputs.forEach((output, vout) => {
-      if (output.scriptHex !== this.config.walletScriptHex || output.value === 0n) return;
-      const key = `${tx.canonicalTxid}:${vout}`;
+    this.accepted.add(txid);
+    tx.outputs.forEach(output => {
+      if (output.scriptHex !== this.config.walletScriptHex || BigInt(output.value) === 0n) return;
+      const key = `${txid}:${output.vout}`;
       if (this.unavailable.has(key)) return;
       const prior = this.utxos.get(key);
-      this.utxos.set(key, { txid: tx.canonicalTxid, vout, value: output.value.toString(), scriptHex: output.scriptHex,
+      this.utxos.set(key, { txid, vout: output.vout, value: output.value, scriptHex: output.scriptHex,
         status: prior?.status ?? "unconfirmed", height: prior?.height ?? 0, source: prior?.source ?? "local", occupiedBy: null, used: false });
     });
   }
-  previousTransaction(txid: string): string | null { return this.parents.get(txid.toLowerCase()) ?? null; }
   spendableOutpoints(): string[] {
     return [...this.utxos].filter(([key, row]) => !this.unavailable.has(key) && row.scriptHex === this.config.walletScriptHex)
       .sort(([a, x], [b, y]) => BigInt(x.value) === BigInt(y.value) ? (a.split(":")[0]! < b.split(":")[0]! ? -1 : a.split(":")[0]! > b.split(":")[0]! ? 1 : Number(a.split(":")[1]) - Number(b.split(":")[1])) : BigInt(x.value) > BigInt(y.value) ? -1 : 1)

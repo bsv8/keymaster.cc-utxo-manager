@@ -11,7 +11,11 @@ pool, _ := utxo.NewFundingKernel(
 // Request or Allocate: select and freeze inputs immediately.
 // Caller constructs/signs/submits the transaction.
 // On EVERY successful submission (including already-known/payout):
-err := pool.AcceptTransaction(successfulRawHex)
+err := pool.AcceptTransaction(utxo.AcceptedTransaction{
+    TxID: successfulTxid,
+    SpentOutpoints: actualSpentOutpoints,
+    Outputs: []utxo.AcceptedOutput{{Vout: changeVout, Value: changeSats, ScriptHex: walletScript}},
+})
 // Caller explicitly releases rejected submissions with pool.Release(id).
 // Unknown network results never release inputs or enable change.
 ```
@@ -19,10 +23,11 @@ err := pool.AcceptTransaction(successfulRawHex)
 State is memory-only, not thread-safe: callers serialize access. There are no
 permission, signature-validation, broadcast, mempool, conflict-observation or
 persistence/recovery APIs. Queries expose available UTXOs/balance, allocation
-records and successfully injected parent bytes. Discarding an instance discards
+records. No transaction bytes are accepted, parsed or cached. Discarding an instance discards
 all state; restart risks are intentionally unmanaged.
 
 Build: `go build ./...`. Uses only the standard library. TS and Go share the same
 allocation contract; tests and current docs live in the engineering repo. This
-memory-pool API is published at the root module tag `v0.2.0`; source/candidate
+memory-pool API is published at the root module tag `v0.2.0`; the structured
+success-input change above is not yet published. Source/candidate
 checks do not substitute for public-release dependency checks.
