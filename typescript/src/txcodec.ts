@@ -275,10 +275,10 @@ export function buildUnsigned(template: UnsignedTemplate): string {
  * Output scripts are opaque but length-exact, so CompactSize boundaries are real.
  */
 export function estimateSignedSize(nInputs: number, outputScriptLengths: readonly number[]): bigint {
-  if (!Number.isSafeInteger(nInputs) || nInputs <= 0) throw new UtmError("policy-denied", "input count out of range");
+  if (!Number.isSafeInteger(nInputs) || nInputs <= 0) throw new UtmError("fee-invalid", "input count out of range");
   let total = 4 + varintSize(nInputs) + nInputs * 148 + varintSize(outputScriptLengths.length);
   for (const len of outputScriptLengths) {
-    if (!Number.isSafeInteger(len) || len < 0 || len > 10000) throw new UtmError("policy-denied", "script length out of range");
+    if (!Number.isSafeInteger(len) || len < 0 || len > 10000) throw new UtmError("fee-invalid", "script length out of range");
     total += 8 + varintSize(len) + len;
   }
   total += 4; // locktime

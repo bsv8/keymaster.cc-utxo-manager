@@ -1,47 +1,33 @@
-# keymaster-utxo-manager (TypeScript)
+# keymaster-utxo-manager
 
-Deterministic UTXO manager kernel + trusted submit orchestration for
-contract `utm/1`. Zero dependencies. The Go implementation in `../go`
-is behavior-identical: same selection, fees, validation, errors and
-byte-identical state serialization.
-
-## Use
+Memory-only UTXO allocation pool for trusted internal callers. No persistence,
+permission checks, signing, broadcasting, mempool tracking or transaction recovery.
 
 ```ts
-import { FundingKernel, submitSigned } from "keymaster-utxo-manager";
-
-const kernel = new FundingKernel(
-  { owner: ownerPublicKeyHex, network: "test" },
-  { walletScriptHex, dustThresholdSats: "1", maxUnconfirmedAncestors: 8 },
+import { FundingKernel } from 'keymaster-utxo-manager';
+const pool = new FundingKernel(
+  { owner, network: 'test' },
+  { walletScriptHex, dustThresholdSats: '1' },
 );
-
-kernel.applySnapshot({ generation: 1, revision: 1, utxos: [...] });
-const view = kernel.request({
-  requestId: "r1",
-  businessAmountSats: "800",
-  feeRateSatPerKb: "10",
-  outputs: [{ scriptHex, value: "800" }],
+pool.applySnapshot({ generation: 1, revision: 1, utxos });
+const allocation = pool.request({
+  requestId: 'payment', businessAmountSats: '1000', feeRateSatPerKb: '10',
+  outputs: [{ scriptHex: recipientScript, value: '1000' }],
 });
-// Build the template, have the trusted signer sign it, then:
-kernel.prepare({ allocationId: "r1", unsignedTxHex });
-kernel.completePrepare({ allocationId: "r1", signedTxHex });
-// Persist the exact bytes BEFORE broadcasting, then:
-await submitSigned(kernel, { store, broadcaster, chain }, "r1", signedTxHex);
+// Caller constructs, signs and submits using allocation.inputs.
+// Every successful submission (including already-known and protocol payouts):
+pool.acceptTransaction(successfulRawTxHex); // change is immediately allocatable
+// Explicit transaction rejection: caller may pool.release(allocation.allocationId).
+// Unknown network result: do not release and do not inject unaccepted change.
 ```
 
-Applications only see request/submit/status. Signing and broadcast stay
-behind the host ports (`DurableStore`, `Broadcaster`, `ChainObserver`).
+`allocate(id, outpoints)` atomically freezes caller-selected pool inputs.
+`spendableBalance`, `spendableOutpoints`, `lookup`, `allocationView` and
+`previousTransaction` are queries. Amounts use decimal strings; fees use sats/KB.
 
-## Rules (utm/1)
+Old WoC responses cannot revive allocated/used inputs. Local outputs survive WoC
+lag until first observed; later complete observations update chain-sourced funds.
+Discard the instance to discard all state. Restart risks are explicitly unmanaged.
 
-- Amounts are canonical decimal strings; fee unit is satoshis per KB.
-- Selection is stable largest-first; fees are `ceil(rate × estimatedSize / 1000)`.
-- Unknown broadcasts keep inputs occupied and never enable change; only a
-  reconcile of the SAME exact bytes settles them.
-- Same scope/inputs/facts in, same outputs out — verified by the shared
-  vector suite in BSV8_Engineering (`test/keymaster.cc-utxo-manager`).
-
-See `../../BSV8_Engineering/docs/keymaster.cc-utxo-manager/` for established
-facts and `../../BSV8_Engineering/todo/keymaster.cc-utxo-manager/` for the
-contract draft and施工 records. Tests and E2E live in the engineering repo,
-not here.
+Build with `npm install && npm run build`. New API is candidate source until a
+matching release is published. Shared tests/docs belong to the engineering repo.

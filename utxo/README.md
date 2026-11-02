@@ -1,33 +1,27 @@
-# keymaster.cc-utxo-manager (Go)
-
-Deterministic UTXO manager kernel + trusted submit orchestration for
-contract `utm/1`. No external dependencies. The TypeScript implementation
-in `../typescript` is behavior-identical: same selection, fees, validation,
-errors and byte-identical state serialization.
-
-## Use
+# Go memory UTXO pool
 
 ```go
 import "github.com/bsv8/keymaster.cc-utxo-manager/utxo"
 
-kernel, _ := utxo.NewFundingKernel(utxo.Scope{Owner: ownerHex, Network: "test"},
-    utxo.ManagerConfig{WalletScriptHex: walletScript, DustThresholdSats: "1", MaxUnconfirmedAncestors: 8})
-
-kernel.ApplySnapshot(utxo.SnapshotInput{Generation: 1, Revision: 1, Utxos: [...]})
-view, _ := kernel.Request(utxo.RequestInput{RequestID: "r1", BusinessAmount: "800",
-    FeeRate: "10", Outputs: []utxo.RequestOutput{{ScriptHex: script, Value: "800"}}})
-// Build the template, have the trusted signer sign it, then:
-kernel.Prepare(utxo.PrepareInput{AllocationID: "r1", UnsignedTxHex: unsigned})
-kernel.CompletePrepare(utxo.CompletePrepareInput{AllocationID: "r1", SignedTxHex: signed})
-// Persist the exact bytes BEFORE broadcasting, then:
-utxo.SubmitSigned(kernel, utxo.Ports{Store: store, Broadcaster: bc, Chain: chain}, "r1", signed)
+pool, _ := utxo.NewFundingKernel(
+    utxo.Scope{Owner: owner, Network: "test"},
+    utxo.ManagerConfig{WalletScriptHex: walletScript, DustThresholdSats: "1"},
+)
+// ApplySnapshot: complete WoC available UTXOs.
+// Request or Allocate: select and freeze inputs immediately.
+// Caller constructs/signs/submits the transaction.
+// On EVERY successful submission (including already-known/payout):
+err := pool.AcceptTransaction(successfulRawHex)
+// Caller explicitly releases rejected submissions with pool.Release(id).
+// Unknown network results never release inputs or enable change.
 ```
 
-Host adapters (keymaster.cc-cli wallet, keymaster.cc Worker) own the
-`DurableStore`/`Broadcaster`/`ChainObserver` ports. Applications never see
-signing or broadcast capabilities.
+State is memory-only, not thread-safe: callers serialize access. There are no
+permission, signature-validation, broadcast, mempool, conflict-observation or
+persistence/recovery APIs. Queries expose available UTXOs/balance, allocation
+records and successfully injected parent bytes. Discarding an instance discards
+all state; restart risks are intentionally unmanaged.
 
-See `../../BSV8_Engineering/docs/keymaster.cc-utxo-manager/` for established
-facts and `../../BSV8_Engineering/todo/keymaster.cc-utxo-manager/` for the
-contract draft and施工 records. Tests and E2E live in the engineering repo,
-not here.
+Build: `go build ./...`. Uses only the standard library. TS and Go share the same
+allocation contract; tests and current docs live in the engineering repo. This
+new API is candidate source, not a claim that a matching release is published.

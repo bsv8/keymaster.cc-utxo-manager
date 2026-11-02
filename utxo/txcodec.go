@@ -371,7 +371,7 @@ func BuildUnsigned(version uint32, locktime uint32, inputs []UnsignedInput, outp
 // P2PKH input upper-bound weight each + exact output bytes.
 func EstimateSignedSize(nInputs int, outputScriptLengths []int) (uint64, error) {
 	if nInputs <= 0 {
-		return 0, fail(ErrPolicyDenied, "input count out of range")
+		return 0, fail(ErrFeeInvalid, "input count out of range")
 	}
 	inCount, err := VarintSize(uint64(nInputs))
 	if err != nil {
@@ -384,7 +384,7 @@ func EstimateSignedSize(nInputs int, outputScriptLengths []int) (uint64, error) 
 	running := uint64(4 + inCount + nInputs*P2PKHInputWeight + outCount)
 	for _, length := range outputScriptLengths {
 		if length < 0 || length > 10000 {
-			return 0, fail(ErrPolicyDenied, "script length out of range")
+			return 0, fail(ErrFeeInvalid, "script length out of range")
 		}
 		scriptCount, err := VarintSize(uint64(length))
 		if err != nil {

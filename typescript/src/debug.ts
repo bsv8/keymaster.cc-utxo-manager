@@ -31,12 +31,7 @@ export function debugLog(event: string, details: () => unknown): void {
 
 function operationInput(operation: string, values: unknown[]): unknown {
   const fields: Record<string, string[]> = {
-    reportExternalSpend: ["outpoint", "txid"], setProtected: ["outpoints", "protect", "source"],
-    replace: ["allocationId", "input"], release: ["allocationId"], markSigningIntentDurable: ["allocationId"],
-    settleExternalSignature: ["id", "evidence"], supersedeExternalSignature: ["oldId", "newId"],
-    markDispatching: ["commandId"], broadcastResult: ["commandId", "result"],
-    resolveInputObservations: ["commandId", "observations"], abortUnbroadcast: ["allocationId"],
-    cancelUnstarted: ["allocationId"], importUnknown: ["txid", "rawTxHex"], reconcile: ["commandId", "found", "rawTxHex"],
+    release: ["allocationId"], allocate: ["requestId", "outpoints"], acceptTransaction: ["rawTxHex"],
   };
   return fields[operation] ? Object.fromEntries(fields[operation]!.map((key, index) => [key, values[index]])) : values[0];
 }

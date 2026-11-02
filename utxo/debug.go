@@ -1,7 +1,6 @@
 package utxo
 
 import (
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -114,16 +113,7 @@ func debugLog(event string, details func() any) {
 	sink(DebugEvent{Component: "utxo-manager", Event: event, Details: debugSummary(reflect.ValueOf(details()), "", 0)})
 }
 func (k *FundingKernel) debugState() any {
-	// Observe the same public state shape as TS, never expose internal pointers.
-	blob, err := k.Serialize()
-	if err != nil {
-		return map[string]any{"diagnosticError": "state serialization failed"}
-	}
-	var state any
-	if err := json.Unmarshal([]byte(blob), &state); err != nil {
-		return map[string]any{"diagnosticError": "state decoding failed"}
-	}
-	return state
+	return map[string]any{"available": k.SpendableOutpoints(), "balance": k.SpendableBalance()}
 }
 func (k *FundingKernel) debugTrace(operation string, input any) func() {
 	if !DebugEnabled() {
