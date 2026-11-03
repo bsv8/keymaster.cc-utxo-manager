@@ -15,7 +15,6 @@ const (
 	ErrIDConflict        = "id-conflict"
 	ErrSnapshotStale     = "snapshot-stale"
 	ErrUnknownInput      = "unknown-input"
-	ErrAlreadyOccupied   = "already-occupied"
 	ErrAllocationUnknown = "allocation-unknown"
 	ErrAllocationState   = "allocation-state"
 	ErrTxInvalid         = "tx-invalid"

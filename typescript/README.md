@@ -25,7 +25,8 @@ pool.acceptTransaction({
 // Unknown network result: do not release and do not inject unaccepted change.
 ```
 
-`allocate(id, outpoints)` atomically freezes caller-selected pool inputs.
+`request` is the only allocation entry: callers supply funding needs, never selected
+outpoints. Protocol-only inputs need no wallet allocation; payouts still inject wallet outputs.
 `spendableBalance`, `spendableOutpoints`, `lookup` and `allocationView` are queries.
 The pool never accepts, parses or caches transaction bytes. Amounts use decimal strings; fees use sats/KB.
 
@@ -34,6 +35,6 @@ lag until first observed; later complete observations update chain-sourced funds
 Discard the instance to discard all state. Restart risks are explicitly unmanaged.
 
 Build with `npm install && npm run build`. The memory-pool API is published as
-`keymaster-utxo-manager@0.2.0`; the structured success-input change above is
+`keymaster-utxo-manager@0.2.0`; the structured success-input and request-only allocation changes above are
 source-only and not yet published. Shared tests/docs belong to the engineering repo;
 source/candidate checks and public-release dependency checks are separate.

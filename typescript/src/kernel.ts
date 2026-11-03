@@ -82,17 +82,6 @@ export class FundingKernel {
     return this.freeze(input.requestId, chosen, business.toString(), fee.toString(), change.toString());
   }
 
-  /** Atomically allocate caller-selected wallet inputs; protocol inputs outside
-   * this pool are not wallet funds and must not be inserted here. */
-  allocate(requestId: string, outpoints: readonly string[]): AllocationView {
-    if (this.allocations.has(requestId)) throw new UtmError("id-conflict");
-    const keys = [...new Set(outpoints.map(key => key.toLowerCase()))];
-    for (const key of keys) {
-      if (!this.utxos.has(key)) throw new UtmError("unknown-input", key);
-      if (this.unavailable.has(key)) throw new UtmError("already-occupied", key);
-    }
-    return this.freeze(requestId, keys, "0", "0", "0");
-  }
   private freeze(id: string, keys: string[], business: string, fee: string, change: string): AllocationView {
     const view: AllocationView = { allocationId: id, state: "held", inputs: [...keys], businessSats: business,
       feeSats: fee, changeSats: change, totalInSats: keys.reduce((n, key) => addChecked(n, parseAmount(this.utxos.get(key)!.value)), 0n).toString() };
@@ -156,5 +145,5 @@ export class FundingKernel {
   }
   spendableBalance(): string { return this.spendableOutpoints().reduce((sum, key) => sum + BigInt(this.utxos.get(key)!.value), 0n).toString(); }
 }
-traceKernel(FundingKernel.prototype, ["applySnapshot", "request", "allocate", "release", "acceptTransaction"],
+traceKernel(FundingKernel.prototype, ["applySnapshot", "request", "release", "acceptTransaction"],
   (pool: FundingKernel) => ({available: pool.spendableOutpoints(), balance: pool.spendableBalance()}));

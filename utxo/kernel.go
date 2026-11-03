@@ -190,29 +190,6 @@ func (k *FundingKernel) Request(input RequestInput) (AllocationView, error) {
 	}
 	return k.freeze(input.RequestID, chosen, mustFormat(business), mustFormat(fee), mustFormat(change))
 }
-func (k *FundingKernel) Allocate(id string, outpoints []string) (AllocationView, error) {
-	defer k.debugTrace("allocate", map[string]any{"requestId": id, "outpoints": outpoints})()
-	if _, ok := k.allocations[id]; ok {
-		return AllocationView{}, fail(ErrIDConflict, "")
-	}
-	keys := []string{}
-	seen := map[string]bool{}
-	for _, raw := range outpoints {
-		key := strings.ToLower(raw)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		if k.utxos[key] == nil {
-			return AllocationView{}, fail(ErrUnknownInput, key)
-		}
-		if k.unavailable[key] {
-			return AllocationView{}, fail(ErrAlreadyOccupied, key)
-		}
-		keys = append(keys, key)
-	}
-	return k.freeze(id, keys, "0", "0", "0")
-}
 func copyAllocation(row *AllocationView) AllocationView {
 	result := *row
 	result.Inputs = append([]string{}, row.Inputs...)

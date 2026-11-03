@@ -31,7 +31,7 @@ export function debugLog(event: string, details: () => unknown): void {
 
 function operationInput(operation: string, values: unknown[]): unknown {
   const fields: Record<string, string[]> = {
-    release: ["allocationId"], allocate: ["requestId", "outpoints"],
+    release: ["allocationId"],
   };
   return fields[operation] ? Object.fromEntries(fields[operation]!.map((key, index) => [key, values[index]])) : values[0];
 }
