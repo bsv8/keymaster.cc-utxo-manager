@@ -25,6 +25,7 @@ export interface AllocationView {
   allocationId: string; state: "held" | "used" | "released"; inputs: string[];
   businessSats: string; feeSats: string; changeSats: string; totalInSats: string;
 }
+export interface AllocationMaterial { allocation: AllocationView; inputs: SnapshotUtxo[] }
 export interface PoolUtxo extends SnapshotUtxo { source: "woc" | "local"; occupiedBy: string | null; used: boolean }
 const keyOf = (row: Pick<SnapshotUtxo, "txid" | "vout">) => `${row.txid.toLowerCase()}:${row.vout}`;
 
@@ -142,6 +143,16 @@ export class FundingKernel {
     const row = this.allocations.get(id);
     if (!row) throw new UtmError("allocation-unknown", id);
     return structuredClone(row);
+  }
+  /** Resolve a live allocation and its trusted signing facts atomically.
+   * Allocation lifetime is decided here, never reconstructed by hosts. */
+  resolveAllocation(id: string): AllocationMaterial {
+    const allocation = this.allocationView(id);
+    if (allocation.state !== "held") throw new UtmError("allocation-state");
+    return { allocation, inputs: allocation.inputs.map(key => {
+      const {txid, vout, value, scriptHex, status, height} = this.utxos.get(key)!;
+      return {txid, vout, value, scriptHex, status, height};
+    }) };
   }
   spendableBalance(): string { return this.spendableOutpoints().reduce((sum, key) => sum + BigInt(this.utxos.get(key)!.value), 0n).toString(); }
 }

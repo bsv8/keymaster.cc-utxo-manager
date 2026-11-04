@@ -57,6 +57,10 @@ type AllocationView struct {
 	ChangeSats   string   `json:"changeSats"`
 	TotalInSats  string   `json:"totalInSats"`
 }
+type AllocationMaterial struct {
+	Allocation AllocationView `json:"allocation"`
+	Inputs     []SnapshotUtxo `json:"inputs"`
+}
 type PoolUtxo struct {
 	SnapshotUtxo
 	Source     string `json:"source"`
@@ -310,6 +314,23 @@ func (k *FundingKernel) AllocationView(id string) (AllocationView, error) {
 		return AllocationView{}, fail(ErrAllocationUnknown, id)
 	}
 	return copyAllocation(row), nil
+}
+
+// ResolveAllocation returns only live allocation/signing facts. Hosts do not
+// reconstruct allocation lifetime from internal UTXO occupancy fields.
+func (k *FundingKernel) ResolveAllocation(id string) (AllocationMaterial, error) {
+	view, err := k.AllocationView(id)
+	if err != nil {
+		return AllocationMaterial{}, err
+	}
+	if view.State != "held" {
+		return AllocationMaterial{}, fail(ErrAllocationState, "")
+	}
+	inputs := []SnapshotUtxo{}
+	for _, key := range view.Inputs {
+		inputs = append(inputs, k.utxos[key].SnapshotUtxo)
+	}
+	return AllocationMaterial{Allocation: view, Inputs: inputs}, nil
 }
 func (k *FundingKernel) SpendableBalance() string {
 	var total uint64

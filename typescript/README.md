@@ -14,7 +14,10 @@ const allocation = pool.request({
   requestId: 'payment', businessAmountSats: '1000', feeRateSatPerKb: '10',
   outputs: [{ scriptHex: recipientScript, value: '1000' }],
 });
-// Caller constructs, signs and submits using allocation.inputs.
+const material = pool.resolveAllocation(allocation.allocationId);
+// Caller keeps the original transaction plan using material.inputs (prevouts),
+// allocation.feeSats and allocation.changeSats, then signs/submits that plan.
+// resolveAllocation rejects released/used allocations; no host occupancy checks.
 // Every successful submission (including already-known and protocol payouts):
 pool.acceptTransaction({
   txid: successfulTxid,
@@ -28,6 +31,9 @@ pool.acceptTransaction({
 `request` is the only allocation entry: callers supply funding needs, never selected
 outpoints. Protocol-only inputs need no wallet allocation; payouts still inject wallet outputs.
 `spendableBalance`, `spendableOutpoints`, `lookup` and `allocationView` are queries.
+`resolveAllocation(id)` returns detached `{allocation, inputs}` for held allocations;
+missing IDs report allocation-unknown, released/used allocations report allocation-state.
+Business payment success comes from that exact transaction's receipt, never from allocation state.
 The pool never accepts, parses or caches transaction bytes. Amounts use decimal strings; fees use sats/KB.
 
 Old WoC responses cannot revive allocated/used inputs. Local outputs survive WoC
@@ -35,6 +41,6 @@ lag until first observed; later complete observations update chain-sourced funds
 Discard the instance to discard all state. Restart risks are explicitly unmanaged.
 
 Build with `npm install && npm run build`. The memory-pool API is published as
-`keymaster-utxo-manager@0.2.0`; the structured success-input and request-only allocation changes above are
+`keymaster-utxo-manager@0.2.0`; the structured success-input, request-only allocation and allocation-material changes above are
 source-only and not yet published. Shared tests/docs belong to the engineering repo;
 source/candidate checks and public-release dependency checks are separate.

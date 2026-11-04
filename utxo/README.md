@@ -10,7 +10,10 @@ pool, _ := utxo.NewFundingKernel(
 // ApplySnapshot: complete WoC available UTXOs.
 // Request: the only entry to select and freeze wallet inputs immediately.
 // Protocol-only inputs need no wallet allocation; successful payouts still inject outputs.
-// Caller constructs/signs/submits the transaction.
+// ResolveAllocation(id): detached held allocation + prevouts, including amount/script.
+// Released/used allocations fail; hosts do not recheck internal occupancy fields.
+// Caller retains the original fee/change plan and constructs/signs/submits it.
+// Allocation state is not a payment-success receipt.
 // On EVERY successful submission (including already-known/payout):
 err := pool.AcceptTransaction(utxo.AcceptedTransaction{
     TxID: successfulTxid,
@@ -30,5 +33,5 @@ all state; restart risks are intentionally unmanaged.
 Build: `go build ./...`. Uses only the standard library. TS and Go share the same
 allocation contract; tests and current docs live in the engineering repo. This
 memory-pool API is published at the root module tag `v0.2.0`; the structured
-success-input and request-only allocation changes above are not yet published. Source/candidate
+success-input, request-only allocation and allocation-material changes above are not yet published. Source/candidate
 checks do not substitute for public-release dependency checks.

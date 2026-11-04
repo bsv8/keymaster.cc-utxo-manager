@@ -12,6 +12,7 @@
 
 - `applySnapshot` / `ApplySnapshot`：合并完整 WoC 可用集合。
 - `request` / `Request`：按金额/费用选币并立即冻结。
+- `resolveAllocation` / `ResolveAllocation`：一次返回仍为 held 的分配及完整前序输出材料；拒绝已释放或使用的分配，宿主不重建内部占用不变量。
 - `release` / `Release`：调用者显式释放分配，不核查错误证明或签名状态。
 - `acceptTransaction` / `AcceptTransaction`：每次成功提交后回填 `{txid, spentOutpoints, outputs[{vout,value,scriptHex}]}`，自有输出立即可分配；重复注入不会复活已取走输出。
 - 查询：可分配余额、UTXO 和分配记录；不接收、解析或缓存交易原文，不提供前序交易原文查询。
@@ -20,6 +21,8 @@
 
 钱包输入只通过 request 分配，不支持调用者指定输入补冻结。纯协议池输入不创建钱包分配，成功返回钱包的输出仍须回填。
 
-上述结构化成功回填与 request 唯一分配入口尚未发布。当前正式发布：npm `keymaster-utxo-manager@0.2.0`、Go 根标签 `v0.2.0`。钱包和 CLI 精确消费公共版本；源码、候选与正式依赖验收分别运行，不把公共包发布等同于网站或服务已部署。
+业务保存原交易计划与对应 exact 的回执；分配 used 不代表该付款成功。manager 不接收业务提交编号或付款状态。
+
+上述结构化成功回填、request 唯一分配入口和分配材料解析尚未发布。当前正式发布：npm `keymaster-utxo-manager@0.2.0`、Go 根标签 `v0.2.0`。钱包和 CLI 精确消费公共版本；源码、候选与正式依赖验收分别运行，不把公共包发布等同于网站或服务已部署。
 
 使用说明见各语言目录；当前契约、宿主接入与公共测试只维护在同级工程仓 `BSV8_Engineering/docs/utxo-manager/` 和 `parity/utxo-manager/`。`setDebugSink` / `SetDebugSink` 可开启脱敏内存诊断，诊断不成为资金事实。
