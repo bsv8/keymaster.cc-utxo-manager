@@ -26,6 +26,8 @@ export interface AllocationView {
   businessSats: string; feeSats: string; changeSats: string; totalInSats: string;
 }
 export interface AllocationMaterial { allocation: AllocationView; inputs: SnapshotUtxo[] }
+export interface RequestAllInput { requestId: string }
+export interface AllAllocationMaterial { allocationId: string; inputs: SnapshotUtxo[]; totalInSats: string }
 export interface PoolUtxo extends SnapshotUtxo { source: "woc" | "local"; occupiedBy: string | null; used: boolean }
 const keyOf = (row: Pick<SnapshotUtxo, "txid" | "vout">) => `${row.txid.toLowerCase()}:${row.vout}`;
 
@@ -81,6 +83,18 @@ export class FundingKernel {
     }
     if (!covered) throw new UtmError(pool.length ? "insufficient" : "no-utxos");
     return this.freeze(input.requestId, chosen, business.toString(), fee.toString(), change.toString());
+  }
+
+  /** Freeze every currently available wallet input, without any transaction policy. */
+  requestAll(input: RequestAllInput): AllAllocationMaterial {
+    if (this.allocations.has(input.requestId)) throw new UtmError("id-conflict");
+    const keys = this.spendableOutpoints();
+    if (!keys.length) throw new UtmError("no-utxos");
+    // Legacy request-only amount fields remain unset (zero); callers own the
+    // send-all amount/fee plan. freeze validates the entire sum before mutation.
+    const allocation = this.freeze(input.requestId, keys, "0", "0", "0");
+    return { allocationId: allocation.allocationId, totalInSats: allocation.totalInSats,
+      inputs: this.resolveAllocation(allocation.allocationId).inputs };
   }
 
   private freeze(id: string, keys: string[], business: string, fee: string, change: string): AllocationView {
@@ -156,5 +170,5 @@ export class FundingKernel {
   }
   spendableBalance(): string { return this.spendableOutpoints().reduce((sum, key) => sum + BigInt(this.utxos.get(key)!.value), 0n).toString(); }
 }
-traceKernel(FundingKernel.prototype, ["applySnapshot", "request", "release", "acceptTransaction"],
+traceKernel(FundingKernel.prototype, ["applySnapshot", "request", "requestAll", "release", "acceptTransaction"],
   (pool: FundingKernel) => ({available: pool.spendableOutpoints(), balance: pool.spendableBalance()}));

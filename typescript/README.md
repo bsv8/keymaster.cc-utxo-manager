@@ -28,8 +28,17 @@ pool.acceptTransaction({
 // Unknown network result: do not release and do not inject unaccepted change.
 ```
 
-`request` is the only allocation entry: callers supply funding needs, never selected
-outpoints. Protocol-only inputs need no wallet allocation; payouts still inject wallet outputs.
+`request` allocates by funding needs; `requestAll({requestId})` freezes every
+currently available wallet input atomically, including small inputs. It returns
+`{allocationId, inputs: SnapshotUtxo[], totalInSats}` with detached signing facts;
+allocationId is the original requestId. No fee rate, recipient script, amount or
+transaction layout is accepted/computed. Empty pools fail with no-utxos, reused
+IDs with id-conflict; invalid sums fail without partially freezing inputs.
+Callers compute send-all fees/output only after freezing, with no change and no
+second request. Explicit preparation failures release that original ID; unknown
+signing/submission results never release. The shared internal AllocationView's
+business/fee/change fields are zero for requestAll, not a transaction plan.
+Callers never supply selected outpoints. Protocol-only inputs need no wallet allocation; payouts still inject wallet outputs.
 `spendableBalance`, `spendableOutpoints`, `lookup` and `allocationView` are queries.
 `resolveAllocation(id)` returns detached `{allocation, inputs}` for held allocations;
 missing IDs report allocation-unknown, released/used allocations report allocation-state.
@@ -41,6 +50,6 @@ lag until first observed; later complete observations update chain-sourced funds
 Discard the instance to discard all state. Restart risks are explicitly unmanaged.
 
 Build with `npm install && npm run build`. The memory-pool API is published as
-`keymaster-utxo-manager@0.2.0`; the structured success-input, request-only allocation and allocation-material changes above are
+`keymaster-utxo-manager@0.2.0`; the structured success-input, request/requestAll allocation and allocation-material changes above are
 source-only and not yet published. Shared tests/docs belong to the engineering repo;
 source/candidate checks and public-release dependency checks are separate.

@@ -8,7 +8,11 @@ pool, _ := utxo.NewFundingKernel(
     utxo.ManagerConfig{WalletScriptHex: walletScript, DustThresholdSats: "1"},
 )
 // ApplySnapshot: complete WoC available UTXOs.
-// Request: the only entry to select and freeze wallet inputs immediately.
+// Request: select and freeze inputs by funding needs.
+// RequestAll(RequestAllInput{RequestID: id}): freeze all available wallet inputs.
+// Returns AllAllocationMaterial{AllocationID, Inputs, TotalInSats}; no fee/recipient policy.
+// Caller computes send-all fees/output from frozen inputs, with no change or second request.
+// Preparation failures release the original ID; unknown signing/submission results do not.
 // Protocol-only inputs need no wallet allocation; successful payouts still inject outputs.
 // ResolveAllocation(id): detached held allocation + prevouts, including amount/script.
 // Released/used allocations fail; hosts do not recheck internal occupancy fields.
@@ -24,6 +28,11 @@ err := pool.AcceptTransaction(utxo.AcceptedTransaction{
 // Unknown network results never release inputs or enable change.
 ```
 
+RequestAll includes small inputs but excludes held/used and non-wallet inputs.
+Empty pools fail with no-utxos, reused IDs with id-conflict; invalid sums fail
+without partial freezing. Returned input facts are detached. Its shared internal
+AllocationView has zero business/fee/change fields, not a transaction plan.
+
 State is memory-only, not thread-safe: callers serialize access. There are no
 permission, signature-validation, broadcast, mempool, conflict-observation or
 persistence/recovery APIs. Queries expose available UTXOs/balance, allocation
@@ -33,5 +42,5 @@ all state; restart risks are intentionally unmanaged.
 Build: `go build ./...`. Uses only the standard library. TS and Go share the same
 allocation contract; tests and current docs live in the engineering repo. This
 memory-pool API is published at the root module tag `v0.2.0`; the structured
-success-input, request-only allocation and allocation-material changes above are not yet published. Source/candidate
+success-input, request/requestAll allocation and allocation-material changes above are not yet published. Source/candidate
 checks do not substitute for public-release dependency checks.

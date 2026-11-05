@@ -61,6 +61,14 @@ type AllocationMaterial struct {
 	Allocation AllocationView `json:"allocation"`
 	Inputs     []SnapshotUtxo `json:"inputs"`
 }
+type RequestAllInput struct {
+	RequestID string `json:"requestId"`
+}
+type AllAllocationMaterial struct {
+	AllocationID string         `json:"allocationId"`
+	Inputs       []SnapshotUtxo `json:"inputs"`
+	TotalInSats  string         `json:"totalInSats"`
+}
 type PoolUtxo struct {
 	SnapshotUtxo
 	Source     string `json:"source"`
@@ -194,6 +202,31 @@ func (k *FundingKernel) Request(input RequestInput) (AllocationView, error) {
 	}
 	return k.freeze(input.RequestID, chosen, mustFormat(business), mustFormat(fee), mustFormat(change))
 }
+
+// RequestAll freezes every available wallet input without transaction policy.
+// Callers serialize access, as with all other kernel operations.
+func (k *FundingKernel) RequestAll(input RequestAllInput) (AllAllocationMaterial, error) {
+	defer k.debugTrace("requestAll", input)()
+	if _, ok := k.allocations[input.RequestID]; ok {
+		return AllAllocationMaterial{}, fail(ErrIDConflict, "")
+	}
+	keys := k.SpendableOutpoints()
+	if len(keys) == 0 {
+		return AllAllocationMaterial{}, fail(ErrNoUTXOs, "")
+	}
+	// Legacy request-only amount fields are zero, not a transaction fee plan.
+	// freeze validates the entire sum before changing any occupancy.
+	allocation, err := k.freeze(input.RequestID, keys, "0", "0", "0")
+	if err != nil {
+		return AllAllocationMaterial{}, err
+	}
+	material, err := k.ResolveAllocation(allocation.AllocationID)
+	if err != nil {
+		return AllAllocationMaterial{}, err
+	}
+	return AllAllocationMaterial{AllocationID: allocation.AllocationID, Inputs: material.Inputs, TotalInSats: allocation.TotalInSats}, nil
+}
+
 func copyAllocation(row *AllocationView) AllocationView {
 	result := *row
 	result.Inputs = append([]string{}, row.Inputs...)
