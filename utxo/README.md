@@ -26,5 +26,5 @@ its original wallet inputs: only protocol close/refund/arbitration may recover f
 State is memory-only; restart does not restore wallet locks. Funds versions are
 instance-local. Build with `go build ./...` (standard library only). The
 `utmparity` build tag exists exclusively for full-state cross-language verification,
-not production. API version: root-module tag v0.4.0.
+not production. API version: root-module tag v0.5.0.
 Host dependency adoption and npm publication are separate.

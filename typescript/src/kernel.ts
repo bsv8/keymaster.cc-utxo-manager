@@ -15,7 +15,7 @@ export interface SnapshotInput { generation: number; revision: number; utxos: Sn
 export interface P2pkhUtxo { txid: string; vout: number; value: string }
 export interface RequestInput {
   requestId: string; businessAmountSats: string; feeRateSatPerKb: string;
-  outputs: Array<{ scriptHex: string; value: string }>;
+  outputScriptLengths: number[];
 }
 export interface AllocationView {
   allocationId: string; state: "held" | "released"; inputs: string[];
@@ -71,7 +71,11 @@ export class FundingKernel {
     const chosen: string[] = [];
     let total = 0n, fee = 0n, change = 0n, covered = false;
     const pool = this.spendableOutpoints();
-    const lens = input.outputs.map(row => row.scriptHex.length / 2);
+    if (!Array.isArray(input.outputScriptLengths)) throw new UtmError("fee-invalid", "output script lengths must be an array");
+    const lens = [...input.outputScriptLengths];
+    // Preflight the fee shape before selection so invalid lengths fail as
+    // fee-invalid even with no spendable inputs (empty pool or all frozen).
+    estimateSignedSize(1, lens);
     for (let i = 0; i < pool.length; i++) {
       const key = pool[i]!; chosen.push(key); total = addChecked(total, parseAmount(this.utxos.get(key)!.value));
       const withChange = estimateFeeSats(rate, estimateSignedSize(chosen.length, [...lens, this.config.walletScriptHex.length / 2]));

@@ -26,6 +26,6 @@ sendAll 先 requestAll，再由业务根据已冻结输入计算费用及无找�
 
 业务保存原交易计划与对应 exact 的回执；分配状态不代表该付款成功；输出注入不改变输入锁或分配状态，不感知已花费，成功后不得释放由调用者保证。manager 不接收业务提交编号或付款状态。
 
-版本：npm `keymaster-utxo-manager@0.4.0`，Go 根标签 `v0.4.0`。Go 标签与 npm 包独立发布，npm 是否已公开以 registry 为准。宿主使用正式发布的精确版本；源码、候选包与正式依赖分别验证，发布不代表宿主已切换或网站、服务已部署。
+版本：npm `keymaster-utxo-manager@0.5.0`，Go 根标签 `v0.5.0`。Go 标签与 npm 包独立发布，npm 是否已公开以 registry 为准。宿主使用正式发布的精确版本；源码、候选包与正式依赖分别验证，发布不代表宿主已切换或网站、服务已部署。
 
 使用说明见各语言目录；当前契约、宿主接入与公共测试只维护在同级工程仓 `BSV8_Engineering/docs/utxo-manager/` 和 `parity/utxo-manager/`。`setDebugSink` / `SetDebugSink` 可开启脱敏内存诊断，诊断不成为资金事实。

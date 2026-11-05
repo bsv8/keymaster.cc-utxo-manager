@@ -7,7 +7,7 @@ const pool = new FundingKernel({owner, network}, {walletScriptHex, dustThreshold
 pool.applySnapshot({generation: 1, revision: 1, utxos});
 const {allocation, inputs} = pool.request({
   requestId: 'payment', businessAmountSats: '1000', feeRateSatPerKb: '10',
-  outputs: [{scriptHex: recipientScript, value: '1000'}],
+  outputScriptLengths: [recipientScript.length / 2],
 });
 // Pass these allocated inputs to the builder; never select externally.
 pool.assertAllocationUsable(allocation.allocationId); // no returned data
@@ -46,7 +46,7 @@ Protocol-only inputs need no wallet allocation; their returned wallet outputs
 still enter through successful receipts. Discarding the instance discards state;
 there is no restoration/compensation from caller journals.
 
-Package API version: 0.4.0. Typecheck/build with TypeScript using tsconfig.json.
+Package API version: 0.5.0. Typecheck/build with TypeScript using tsconfig.json.
 Public registry availability and host dependency adoption are separate from the
 package version. Shared docs and parity belong to the engineering repo.
 Production must not compile verification-only observers.

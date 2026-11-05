@@ -34,15 +34,11 @@ type P2pkhUtxo struct {
 	Vout  uint32 `json:"vout"`
 	Value string `json:"value"`
 }
-type RequestOutput struct {
-	ScriptHex string `json:"scriptHex"`
-	Value     string `json:"value"`
-}
 type RequestInput struct {
-	RequestID      string          `json:"requestId"`
-	BusinessAmount string          `json:"businessAmountSats"`
-	FeeRate        string          `json:"feeRateSatPerKb"`
-	Outputs        []RequestOutput `json:"outputs"`
+	RequestID           string `json:"requestId"`
+	BusinessAmount      string `json:"businessAmountSats"`
+	FeeRate             string `json:"feeRateSatPerKb"`
+	OutputScriptLengths []int  `json:"outputScriptLengths"`
 }
 type AllocationView struct {
 	AllocationID string   `json:"allocationId"`
@@ -161,9 +157,14 @@ func (k *FundingKernel) request(input RequestInput) (AllocationView, error) {
 	}
 	pool := k.spendableOutpoints()
 	chosen := []string{}
-	lens := []int{}
-	for _, row := range input.Outputs {
-		lens = append(lens, len(row.ScriptHex)/2)
+	if input.OutputScriptLengths == nil {
+		return AllocationView{}, fail(ErrFeeInvalid, "output script lengths must be an array")
+	}
+	lens := append([]int{}, input.OutputScriptLengths...)
+	// Preflight the fee shape before selection so invalid lengths fail as
+	// fee-invalid even with no spendable inputs (empty pool or all frozen).
+	if _, err := EstimateSignedSize(1, lens); err != nil {
+		return AllocationView{}, err
 	}
 	var total, fee, change uint64
 	covered := false
