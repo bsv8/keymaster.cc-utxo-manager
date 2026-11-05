@@ -10,7 +10,6 @@ const {allocationId, inputs, businessSats, feeSats, changeSats, totalInSats} = p
   outputScriptLengths: [recipientScript.length / 2],
 });
 // Pass these allocated inputs to the builder; never select externally.
-pool.assertAllocationUsable(allocationId); // no returned data
 pool.funds(); // {availableSats, version}; no raw UTXO queries
 ```
 
@@ -47,7 +46,7 @@ Protocol-only inputs need no wallet allocation; their returned wallet outputs
 still enter through successful receipts. Discarding the instance discards state;
 there is no restoration/compensation from caller journals.
 
-Package API version: 0.6.0 candidate (published: 0.5.0). Typecheck/build with TypeScript using tsconfig.json.
+Package API version: 0.7.0 candidate (published: 0.6.0). Typecheck/build with TypeScript using tsconfig.json.
 Public registry availability and host dependency adoption are separate from the
 package version. Shared docs and parity belong to the engineering repo.
 Production must not compile verification-only observers.

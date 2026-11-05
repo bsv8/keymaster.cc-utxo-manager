@@ -370,16 +370,6 @@ func (k *FundingKernel) allocationMaterial(id string) (AllocationMaterial, error
 		BusinessSats: view.BusinessSats, FeeSats: view.FeeSats,
 		ChangeSats: view.ChangeSats, TotalInSats: view.TotalInSats}, nil
 }
-func (k *FundingKernel) AssertAllocationUsable(id string) error {
-	row := k.allocations[id]
-	if row == nil {
-		return fail(ErrAllocationUnknown, "")
-	}
-	if row.State != "held" {
-		return fail(ErrAllocationState, "")
-	}
-	return nil
-}
 func (k *FundingKernel) Funds() Funds {
 	var available uint64
 	for key, row := range k.utxos {

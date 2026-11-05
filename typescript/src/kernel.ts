@@ -172,11 +172,6 @@ export class FundingKernel {
         return {txid, vout, value, status, height};
       }) };
   }
-  assertAllocationUsable(id: string): void {
-    const allocation = this.allocations.get(id);
-    if (!allocation) throw new UtmError("allocation-unknown");
-    if (allocation.state !== "held") throw new UtmError("allocation-state");
-  }
   funds(): Funds {
     let available = 0n;
     for (const [key, row] of this.utxos) {
