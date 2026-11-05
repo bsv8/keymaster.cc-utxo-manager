@@ -13,16 +13,14 @@ type Scope struct {
 	Network string `json:"network"`
 }
 type ManagerConfig struct {
-	WalletScriptHex   string `json:"walletScriptHex"`
 	DustThresholdSats string `json:"dustThresholdSats"`
 }
 type SnapshotUtxo struct {
-	TxID      string `json:"txid"`
-	Vout      uint32 `json:"vout"`
-	Value     string `json:"value"`
-	ScriptHex string `json:"scriptHex"`
-	Status    string `json:"status"`
-	Height    int64  `json:"height"`
+	TxID   string `json:"txid"`
+	Vout   uint32 `json:"vout"`
+	Value  string `json:"value"`
+	Status string `json:"status"`
+	Height int64  `json:"height"`
 }
 type SnapshotInput struct {
 	Generation int64          `json:"generation"`
@@ -40,7 +38,11 @@ type RequestInput struct {
 	FeeRate             string `json:"feeRateSatPerKb"`
 	OutputScriptLengths []int  `json:"outputScriptLengths"`
 }
-type AllocationView struct {
+
+// allocationRecord is the internal freeze record: allocation lifecycle plus
+// the outpoint key list used for release and lock checks. It is never
+// returned to callers directly.
+type allocationRecord struct {
 	AllocationID string   `json:"allocationId"`
 	State        string   `json:"state"`
 	Inputs       []string `json:"inputs"`
@@ -50,8 +52,12 @@ type AllocationView struct {
 	TotalInSats  string   `json:"totalInSats"`
 }
 type AllocationMaterial struct {
-	Allocation AllocationView `json:"allocation"`
-	Inputs     []SnapshotUtxo `json:"inputs"`
+	AllocationID string         `json:"allocationId"`
+	Inputs       []SnapshotUtxo `json:"inputs"`
+	BusinessSats string         `json:"businessSats"`
+	FeeSats      string         `json:"feeSats"`
+	ChangeSats   string         `json:"changeSats"`
+	TotalInSats  string         `json:"totalInSats"`
 }
 type RequestAllInput struct {
 	RequestID string `json:"requestId"`
@@ -78,7 +84,7 @@ type FundingKernel struct {
 	scope        Scope
 	config       ManagerConfig
 	utxos        map[string]*PoolUtxo
-	allocations  map[string]*AllocationView
+	allocations  map[string]*allocationRecord
 	unavailable  map[string]bool
 	injected     map[string]bool
 	generation   int64
@@ -87,7 +93,7 @@ type FundingKernel struct {
 }
 
 func NewFundingKernel(scope Scope, config ManagerConfig) (*FundingKernel, error) {
-	return &FundingKernel{scope: scope, config: config, utxos: map[string]*PoolUtxo{}, allocations: map[string]*AllocationView{}, unavailable: map[string]bool{}, injected: map[string]bool{}}, nil
+	return &FundingKernel{scope: scope, config: config, utxos: map[string]*PoolUtxo{}, allocations: map[string]*allocationRecord{}, unavailable: map[string]bool{}, injected: map[string]bool{}}, nil
 }
 func poolKey(txid string, vout uint32) string {
 	return strings.ToLower(txid) + ":" + strconv.FormatUint(uint64(vout), 10)
@@ -112,9 +118,7 @@ func (k *FundingKernel) ApplySnapshot(input SnapshotInput) (SnapshotResult, erro
 		if prior == nil {
 			result.Added++
 		}
-		row.TxID = strings.ToLower(row.TxID)
-		row.ScriptHex = k.config.WalletScriptHex
-		k.utxos[key] = &PoolUtxo{SnapshotUtxo: row, Source: source}
+		k.utxos[key] = &PoolUtxo{SnapshotUtxo: SnapshotUtxo{TxID: strings.ToLower(row.TxID), Vout: row.Vout, Value: row.Value, Status: row.Status, Height: row.Height}, Source: source}
 	}
 	for key, row := range k.utxos {
 		if row.Source == "woc" && !k.unavailable[key] {
@@ -138,33 +142,33 @@ func (k *FundingKernel) Request(input RequestInput) (AllocationMaterial, error) 
 	}
 	return k.allocationMaterial(view.AllocationID)
 }
-func (k *FundingKernel) request(input RequestInput) (AllocationView, error) {
+func (k *FundingKernel) request(input RequestInput) (allocationRecord, error) {
 	defer k.debugTrace("request", input)()
 	if _, ok := k.allocations[input.RequestID]; ok {
-		return AllocationView{}, fail(ErrIDConflict, "")
+		return allocationRecord{}, fail(ErrIDConflict, "")
 	}
 	business, err := ParseAmount(input.BusinessAmount)
 	if err != nil {
-		return AllocationView{}, err
+		return allocationRecord{}, err
 	}
 	rate, err := ParseFeeRate(input.FeeRate)
 	if err != nil {
-		return AllocationView{}, err
+		return allocationRecord{}, err
 	}
 	dust, err := ParseAmount(k.config.DustThresholdSats)
 	if err != nil {
-		return AllocationView{}, err
+		return allocationRecord{}, err
 	}
 	pool := k.spendableOutpoints()
 	chosen := []string{}
 	if input.OutputScriptLengths == nil {
-		return AllocationView{}, fail(ErrFeeInvalid, "output script lengths must be an array")
+		return allocationRecord{}, fail(ErrFeeInvalid, "output script lengths must be an array")
 	}
 	lens := append([]int{}, input.OutputScriptLengths...)
 	// Preflight the fee shape before selection so invalid lengths fail as
 	// fee-invalid even with no spendable inputs (empty pool or all frozen).
 	if _, err := EstimateSignedSize(1, lens); err != nil {
-		return AllocationView{}, err
+		return allocationRecord{}, err
 	}
 	var total, fee, change uint64
 	covered := false
@@ -172,20 +176,20 @@ func (k *FundingKernel) request(input RequestInput) (AllocationView, error) {
 		chosen = append(chosen, key)
 		value, err := ParseAmount(k.utxos[key].Value)
 		if err != nil {
-			return AllocationView{}, err
+			return allocationRecord{}, err
 		}
 		total, err = AddChecked(total, value)
 		if err != nil {
-			return AllocationView{}, err
+			return allocationRecord{}, err
 		}
-		withLens := append(append([]int{}, lens...), len(k.config.WalletScriptHex)/2)
+		withLens := append(append([]int{}, lens...), P2PKHLockingScriptLen)
 		size, err := EstimateSignedSize(len(chosen), withLens)
 		if err != nil {
-			return AllocationView{}, err
+			return allocationRecord{}, err
 		}
 		withChange, err := EstimateFeeSats(rate, size)
 		if err != nil {
-			return AllocationView{}, err
+			return allocationRecord{}, err
 		}
 		if total >= business+withChange+dust {
 			fee = withChange
@@ -195,11 +199,11 @@ func (k *FundingKernel) request(input RequestInput) (AllocationView, error) {
 		}
 		size, err = EstimateSignedSize(len(chosen), lens)
 		if err != nil {
-			return AllocationView{}, err
+			return allocationRecord{}, err
 		}
 		without, err := EstimateFeeSats(rate, size)
 		if err != nil {
-			return AllocationView{}, err
+			return allocationRecord{}, err
 		}
 		if i == len(pool)-1 && total >= business+without {
 			fee = total - business
@@ -211,7 +215,7 @@ func (k *FundingKernel) request(input RequestInput) (AllocationView, error) {
 		if len(pool) == 0 {
 			code = ErrNoUTXOs
 		}
-		return AllocationView{}, fail(code, "")
+		return allocationRecord{}, fail(code, "")
 	}
 	return k.freeze(input.RequestID, chosen, mustFormat(business), mustFormat(fee), mustFormat(change))
 }
@@ -240,28 +244,28 @@ func (k *FundingKernel) RequestAll(input RequestAllInput) (AllAllocationMaterial
 	return AllAllocationMaterial{AllocationID: allocation.AllocationID, Inputs: material.Inputs, TotalInSats: allocation.TotalInSats}, nil
 }
 
-func copyAllocation(row *AllocationView) AllocationView {
+func copyAllocation(row *allocationRecord) allocationRecord {
 	result := *row
 	result.Inputs = append([]string{}, row.Inputs...)
 	return result
 }
-func (k *FundingKernel) freeze(id string, keys []string, business, fee, change string) (AllocationView, error) {
+func (k *FundingKernel) freeze(id string, keys []string, business, fee, change string) (allocationRecord, error) {
 	var total uint64
 	for _, key := range keys {
 		value, err := ParseAmount(k.utxos[key].Value)
 		if err != nil {
-			return AllocationView{}, err
+			return allocationRecord{}, err
 		}
 		total, err = AddChecked(total, value)
 		if err != nil {
-			return AllocationView{}, err
+			return allocationRecord{}, err
 		}
 	}
 	for _, key := range keys {
 		k.unavailable[key] = true
 		k.utxos[key].OccupiedBy = id
 	}
-	row := &AllocationView{AllocationID: id, State: "held", Inputs: append([]string{}, keys...), BusinessSats: business, FeeSats: fee, ChangeSats: change, TotalInSats: mustFormat(total)}
+	row := &allocationRecord{AllocationID: id, State: "held", Inputs: append([]string{}, keys...), BusinessSats: business, FeeSats: fee, ChangeSats: change, TotalInSats: mustFormat(total)}
 	k.allocations[id] = row
 	k.fundsVersion++
 	return copyAllocation(row), nil
@@ -312,7 +316,7 @@ func (k *FundingKernel) InjectP2pkhUtxos(outputs []P2pkhUtxo) error {
 		if k.unavailable[key] || k.utxos[key] != nil {
 			continue
 		}
-		k.utxos[key] = &PoolUtxo{SnapshotUtxo: SnapshotUtxo{TxID: strings.ToLower(output.TxID), Vout: output.Vout, Value: output.Value, ScriptHex: k.config.WalletScriptHex, Status: "unconfirmed", Height: 0}, Source: "local"}
+		k.utxos[key] = &PoolUtxo{SnapshotUtxo: SnapshotUtxo{TxID: strings.ToLower(output.TxID), Vout: output.Vout, Value: output.Value, Status: "unconfirmed", Height: 0}, Source: "local"}
 	}
 	if before != k.fundsIdentity() {
 		k.fundsVersion++
@@ -340,10 +344,10 @@ func (k *FundingKernel) spendableOutpoints() []string {
 	})
 	return keys
 }
-func (k *FundingKernel) readAllocation(id string) (AllocationView, error) {
+func (k *FundingKernel) readAllocation(id string) (allocationRecord, error) {
 	row := k.allocations[id]
 	if row == nil {
-		return AllocationView{}, fail(ErrAllocationUnknown, id)
+		return allocationRecord{}, fail(ErrAllocationUnknown, id)
 	}
 	return copyAllocation(row), nil
 }
@@ -362,7 +366,9 @@ func (k *FundingKernel) allocationMaterial(id string) (AllocationMaterial, error
 	for _, key := range view.Inputs {
 		inputs = append(inputs, k.utxos[key].SnapshotUtxo)
 	}
-	return AllocationMaterial{Allocation: view, Inputs: inputs}, nil
+	return AllocationMaterial{AllocationID: view.AllocationID, Inputs: inputs,
+		BusinessSats: view.BusinessSats, FeeSats: view.FeeSats,
+		ChangeSats: view.ChangeSats, TotalInSats: view.TotalInSats}, nil
 }
 func (k *FundingKernel) AssertAllocationUsable(id string) error {
 	row := k.allocations[id]

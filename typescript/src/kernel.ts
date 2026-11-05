@@ -2,13 +2,14 @@
 // transaction-result recovery, mempool tracking or persistence lives here.
 import { UtmError } from "./contract.js";
 import { traceKernel } from "./debug.js";
-import { estimateFeeSats, parseAmount, parseFeeRate, addChecked } from "./amounts.js";
+import { parseAmount, parseFeeRate, addChecked, estimateFeeSats } from "./amounts.js";
 import { estimateSignedSize } from "./txcodec.js";
+import { P2PKH_LOCKING_SCRIPT_LEN } from "./contract.js";
 
 export interface Scope { owner: string; network: "main" | "test" }
-export interface ManagerConfig { walletScriptHex: string; dustThresholdSats: string }
+export interface ManagerConfig { dustThresholdSats: string }
 export interface SnapshotUtxo {
-  txid: string; vout: number; value: string; scriptHex: string;
+  txid: string; vout: number; value: string;
   status: "confirmed" | "unconfirmed"; height: number;
 }
 export interface SnapshotInput { generation: number; revision: number; utxos: SnapshotUtxo[] }
@@ -17,20 +18,27 @@ export interface RequestInput {
   requestId: string; businessAmountSats: string; feeRateSatPerKb: string;
   outputScriptLengths: number[];
 }
-export interface AllocationView {
+// Internal freeze record: allocation lifecycle plus outpoint key list for
+// release and lock checks. Never returned to callers directly.
+interface AllocationRecord {
   allocationId: string; state: "held" | "released"; inputs: string[];
   businessSats: string; feeSats: string; changeSats: string; totalInSats: string;
 }
-export interface AllocationMaterial { allocation: AllocationView; inputs: SnapshotUtxo[] }
+export interface AllocationMaterial {
+  allocationId: string; inputs: SnapshotUtxo[];
+  businessSats: string; feeSats: string; changeSats: string; totalInSats: string;
+}
 export interface RequestAllInput { requestId: string }
-export interface AllAllocationMaterial { allocationId: string; inputs: SnapshotUtxo[]; totalInSats: string }
+export interface AllAllocationMaterial {
+  allocationId: string; inputs: SnapshotUtxo[]; totalInSats: string;
+}
 export interface Funds { availableSats: string; version: number }
 interface PoolUtxo extends SnapshotUtxo { source: "woc" | "local"; occupiedBy: string | null }
 const keyOf = (row: Pick<SnapshotUtxo, "txid" | "vout">) => `${row.txid.toLowerCase()}:${row.vout}`;
 
 export class FundingKernel {
   private utxos = new Map<string, PoolUtxo>();
-  private allocations = new Map<string, AllocationView>();
+  private allocations = new Map<string, AllocationRecord>();
   // Includes inputs absent from a later snapshot; stale WoC must not revive them.
   private unavailable = new Set<string>();
   // Injection deduplication survives removal from the current pool.
@@ -51,7 +59,8 @@ export class FundingKernel {
       const prior = this.utxos.get(key);
       if (this.unavailable.has(key)) continue;
       if (!prior) added++;
-      this.utxos.set(key, { ...row, txid: row.txid.toLowerCase(), scriptHex: this.config.walletScriptHex, source: "woc", occupiedBy: null });
+      this.utxos.set(key, { txid: row.txid.toLowerCase(), vout: row.vout, value: row.value,
+        status: row.status, height: row.height, source: "woc", occupiedBy: null });
     }
     for (const [key, row] of this.utxos) {
       if (row.source === "woc" && !this.unavailable.has(key) && !incoming.has(key)) {
@@ -78,7 +87,7 @@ export class FundingKernel {
     estimateSignedSize(1, lens);
     for (let i = 0; i < pool.length; i++) {
       const key = pool[i]!; chosen.push(key); total = addChecked(total, parseAmount(this.utxos.get(key)!.value));
-      const withChange = estimateFeeSats(rate, estimateSignedSize(chosen.length, [...lens, this.config.walletScriptHex.length / 2]));
+      const withChange = estimateFeeSats(rate, estimateSignedSize(chosen.length, [...lens, P2PKH_LOCKING_SCRIPT_LEN]));
       if (total >= business + withChange + dust) {
         fee = withChange; change = total - business - fee; covered = true; break;
       }
@@ -103,8 +112,8 @@ export class FundingKernel {
       inputs: this.allocationMaterial(allocation.allocationId).inputs };
   }
 
-  private freeze(id: string, keys: string[], business: string, fee: string, change: string): AllocationView {
-    const view: AllocationView = { allocationId: id, state: "held", inputs: [...keys], businessSats: business,
+  private freeze(id: string, keys: string[], business: string, fee: string, change: string): AllocationRecord {
+    const view: AllocationRecord = { allocationId: id, state: "held", inputs: [...keys], businessSats: business,
       feeSats: fee, changeSats: change, totalInSats: keys.reduce((n, key) => addChecked(n, parseAmount(this.utxos.get(key)!.value)), 0n).toString() };
     for (const key of keys) { this.unavailable.add(key); this.utxos.get(key)!.occupiedBy = id; }
     this.allocations.set(id, view);
@@ -129,7 +138,7 @@ export class FundingKernel {
   injectP2pkhUtxos(outputs: readonly P2pkhUtxo[]): void {
     // Validate the entire batch before changing either money or deduplication.
     // This is amount arithmetic, not script ownership or transaction validation.
-    for (const output of outputs) parseAmount(output.value);
+    for (const output of outputs) parseAmount((output as P2pkhUtxo).value);
     const before = this.fundsIdentity();
     for (const output of outputs) {
       if (output.value === "0") continue;
@@ -137,7 +146,7 @@ export class FundingKernel {
       if (this.injected.has(key)) continue;
       this.injected.add(key);
       if (this.unavailable.has(key) || this.utxos.has(key)) continue;
-      this.utxos.set(key, { ...output, txid: output.txid.toLowerCase(), scriptHex: this.config.walletScriptHex,
+      this.utxos.set(key, { txid: output.txid.toLowerCase(), vout: output.vout, value: output.value,
         status: "unconfirmed", height: 0, source: "local", occupiedBy: null });
     }
     if (before !== this.fundsIdentity()) this.fundsVersion++;
@@ -147,7 +156,7 @@ export class FundingKernel {
       .sort(([a, x], [b, y]) => BigInt(x.value) === BigInt(y.value) ? (a.split(":")[0]! < b.split(":")[0]! ? -1 : a.split(":")[0]! > b.split(":")[0]! ? 1 : Number(a.split(":")[1]) - Number(b.split(":")[1])) : BigInt(x.value) > BigInt(y.value) ? -1 : 1)
       .map(([key]) => key);
   }
-  private readAllocation(id: string): AllocationView {
+  private readAllocation(id: string): AllocationRecord {
     const row = this.allocations.get(id);
     if (!row) throw new UtmError("allocation-unknown", id);
     return structuredClone(row);
@@ -156,10 +165,12 @@ export class FundingKernel {
   private allocationMaterial(id: string): AllocationMaterial {
     const allocation = this.readAllocation(id);
     if (allocation.state !== "held") throw new UtmError("allocation-state");
-    return { allocation, inputs: allocation.inputs.map(key => {
-      const {txid, vout, value, scriptHex, status, height} = this.utxos.get(key)!;
-      return {txid, vout, value, scriptHex, status, height};
-    }) };
+    return { allocationId: allocation.allocationId, businessSats: allocation.businessSats,
+      feeSats: allocation.feeSats, changeSats: allocation.changeSats, totalInSats: allocation.totalInSats,
+      inputs: allocation.inputs.map(key => {
+        const {txid, vout, value, status, height} = this.utxos.get(key)!;
+        return {txid, vout, value, status, height};
+      }) };
   }
   assertAllocationUsable(id: string): void {
     const allocation = this.allocations.get(id);

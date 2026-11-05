@@ -7,6 +7,10 @@ import "fmt"
 const MaxMoneySats uint64 = 2100000000000000
 const BytesPerKB uint64 = 1000
 const P2PKHInputWeight = 148
+
+// P2PKHLockingScriptLen is the fixed P2PKH locking-script length (76a914<20>88ac).
+// Change-output fee estimation uses this constant instead of an instance script.
+const P2PKHLockingScriptLen = 25
 const (
 	ErrInsufficient      = "insufficient"
 	ErrNoUTXOs           = "no-utxos"
