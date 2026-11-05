@@ -29,15 +29,10 @@ type SnapshotInput struct {
 	Revision   int64          `json:"revision"`
 	Utxos      []SnapshotUtxo `json:"utxos"`
 }
-type AcceptedOutput struct {
-	Vout      uint32 `json:"vout"`
-	Value     string `json:"value"`
-	ScriptHex string `json:"scriptHex"`
-}
-type AcceptedTransaction struct {
-	TxID           string           `json:"txid"`
-	SpentOutpoints []string         `json:"spentOutpoints"`
-	Outputs        []AcceptedOutput `json:"outputs"`
+type P2pkhUtxo struct {
+	TxID  string `json:"txid"`
+	Vout  uint32 `json:"vout"`
+	Value string `json:"value"`
 }
 type RequestOutput struct {
 	ScriptHex string `json:"scriptHex"`
@@ -72,14 +67,12 @@ type AllAllocationMaterial struct {
 }
 type Funds struct {
 	AvailableSats string `json:"availableSats"`
-	FrozenSats    string `json:"frozenSats"`
 	Version       int64  `json:"version"`
 }
 type PoolUtxo struct {
 	SnapshotUtxo
 	Source     string `json:"source"`
 	OccupiedBy string `json:"occupiedBy"`
-	Used       bool   `json:"used"`
 }
 type SnapshotResult struct {
 	Added   int `json:"added"`
@@ -91,14 +84,14 @@ type FundingKernel struct {
 	utxos        map[string]*PoolUtxo
 	allocations  map[string]*AllocationView
 	unavailable  map[string]bool
-	accepted     map[string]bool
+	injected     map[string]bool
 	generation   int64
 	revision     int64
 	fundsVersion int64
 }
 
 func NewFundingKernel(scope Scope, config ManagerConfig) (*FundingKernel, error) {
-	return &FundingKernel{scope: scope, config: config, utxos: map[string]*PoolUtxo{}, allocations: map[string]*AllocationView{}, unavailable: map[string]bool{}, accepted: map[string]bool{}}, nil
+	return &FundingKernel{scope: scope, config: config, utxos: map[string]*PoolUtxo{}, allocations: map[string]*AllocationView{}, unavailable: map[string]bool{}, injected: map[string]bool{}}, nil
 }
 func poolKey(txid string, vout uint32) string {
 	return strings.ToLower(txid) + ":" + strconv.FormatUint(uint64(vout), 10)
@@ -124,6 +117,7 @@ func (k *FundingKernel) ApplySnapshot(input SnapshotInput) (SnapshotResult, erro
 			result.Added++
 		}
 		row.TxID = strings.ToLower(row.TxID)
+		row.ScriptHex = k.config.WalletScriptHex
 		k.utxos[key] = &PoolUtxo{SnapshotUtxo: row, Source: source}
 	}
 	for key, row := range k.utxos {
@@ -280,12 +274,9 @@ func (k *FundingKernel) Release(id string) error {
 	if row.State == "released" {
 		return nil
 	}
-	if row.State == "used" {
-		return fail(ErrAllocationState, "successful inputs are already used")
-	}
 	for _, key := range row.Inputs {
 		u := k.utxos[key]
-		if u != nil && u.OccupiedBy == id && !u.Used {
+		if u != nil && u.OccupiedBy == id {
 			u.OccupiedBy = ""
 			delete(k.unavailable, key)
 		}
@@ -295,42 +286,32 @@ func (k *FundingKernel) Release(id string) error {
 	return nil
 }
 
-// AcceptTransaction applies trusted caller-confirmed successful prevouts and outputs.
-// No transaction bytes, parsing, signature or result validation lives here.
-func (k *FundingKernel) AcceptTransaction(tx AcceptedTransaction) error {
-	defer k.debugTrace("acceptTransaction", tx)()
-	txid := strings.ToLower(tx.TxID)
-	if k.accepted[txid] {
-		return nil
+// InjectP2pkhUtxos injects immediately allocatable P2PKH outputs. The caller
+// guarantees wallet ownership and spendability; no script/result checks live here.
+// Input locks are unchanged; callers must not release successful allocations.
+func (k *FundingKernel) InjectP2pkhUtxos(outputs []P2pkhUtxo) error {
+	defer k.debugTrace("injectP2pkhUtxos", outputs)()
+	// Preflight the entire batch before changing money or deduplication.
+	// Amount arithmetic does not validate script ownership or transaction results.
+	for _, output := range outputs {
+		if _, err := ParseAmount(output.Value); err != nil {
+			return err
+		}
 	}
 	before := k.fundsIdentity()
-	for _, input := range tx.SpentOutpoints {
-		key := strings.ToLower(input)
-		k.unavailable[key] = true
-		if u := k.utxos[key]; u != nil {
-			u.Used = true
-			if allocation := k.allocations[u.OccupiedBy]; allocation != nil {
-				allocation.State = "used"
-			}
-		}
-	}
-	k.accepted[txid] = true
-	for _, output := range tx.Outputs {
-		if output.ScriptHex != k.config.WalletScriptHex || output.Value == "0" {
+	for _, output := range outputs {
+		if output.Value == "0" {
 			continue
 		}
-		key := poolKey(txid, output.Vout)
-		if k.unavailable[key] {
+		key := poolKey(output.TxID, output.Vout)
+		if k.injected[key] {
 			continue
 		}
-		status, source := "unconfirmed", "local"
-		var height int64
-		if prior := k.utxos[key]; prior != nil {
-			status = prior.Status
-			height = prior.Height
-			source = prior.Source
+		k.injected[key] = true
+		if k.unavailable[key] || k.utxos[key] != nil {
+			continue
 		}
-		k.utxos[key] = &PoolUtxo{SnapshotUtxo: SnapshotUtxo{TxID: txid, Vout: output.Vout, Value: output.Value, ScriptHex: output.ScriptHex, Status: status, Height: height}, Source: source}
+		k.utxos[key] = &PoolUtxo{SnapshotUtxo: SnapshotUtxo{TxID: strings.ToLower(output.TxID), Vout: output.Vout, Value: output.Value, ScriptHex: k.config.WalletScriptHex, Status: "unconfirmed", Height: 0}, Source: "local"}
 	}
 	if before != k.fundsIdentity() {
 		k.fundsVersion++
@@ -339,8 +320,8 @@ func (k *FundingKernel) AcceptTransaction(tx AcceptedTransaction) error {
 }
 func (k *FundingKernel) spendableOutpoints() []string {
 	keys := []string{}
-	for key, row := range k.utxos {
-		if !k.unavailable[key] && row.ScriptHex == k.config.WalletScriptHex {
+	for key := range k.utxos {
+		if !k.unavailable[key] {
 			keys = append(keys, key)
 		}
 	}
@@ -393,26 +374,19 @@ func (k *FundingKernel) AssertAllocationUsable(id string) error {
 	return nil
 }
 func (k *FundingKernel) Funds() Funds {
-	var available, frozen uint64
+	var available uint64
 	for key, row := range k.utxos {
-		if row.ScriptHex != k.config.WalletScriptHex || row.Used {
-			continue
-		}
-		value, _ := ParseAmount(row.Value)
 		if !k.unavailable[key] {
+			value, _ := ParseAmount(row.Value)
 			available += value
-		} else if a := k.allocations[row.OccupiedBy]; a != nil && a.State == "held" {
-			frozen += value
 		}
 	}
-	return Funds{AvailableSats: mustFormat(available), FrozenSats: mustFormat(frozen), Version: k.fundsVersion}
+	return Funds{AvailableSats: mustFormat(available), Version: k.fundsVersion}
 }
 func (k *FundingKernel) fundsIdentity() string {
 	keys := []string{}
-	for key, row := range k.utxos {
-		if row.ScriptHex == k.config.WalletScriptHex {
-			keys = append(keys, key)
-		}
+	for key := range k.utxos {
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	rows := []any{}
@@ -425,7 +399,7 @@ func (k *FundingKernel) fundsIdentity() string {
 				state = a.State
 			}
 		}
-		rows = append(rows, []any{key, row.Value, k.unavailable[key], row.Used, occupied, state})
+		rows = append(rows, []any{key, row.Value, k.unavailable[key], occupied, state})
 	}
 	raw, _ := json.Marshal(rows)
 	return string(raw)

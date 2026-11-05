@@ -13,7 +13,7 @@ func (k *FundingKernel) ParityState() map[string]any {
 		if row.OccupiedBy != "" {
 			occupied = row.OccupiedBy
 		}
-		available = append(available, map[string]any{"key": key, "txid": row.TxID, "vout": row.Vout, "value": row.Value, "scriptHex": row.ScriptHex, "status": row.Status, "height": row.Height, "source": row.Source, "occupiedBy": occupied, "used": row.Used})
+		available = append(available, map[string]any{"key": key, "txid": row.TxID, "vout": row.Vout, "value": row.Value, "scriptHex": row.ScriptHex, "status": row.Status, "height": row.Height, "source": row.Source, "occupiedBy": occupied})
 	}
 	names := []string{}
 	for id := range k.allocations {
@@ -38,16 +38,16 @@ func (k *FundingKernel) ParityState() map[string]any {
 		if row.OccupiedBy != "" {
 			occupied = row.OccupiedBy
 		}
-		all = append(all, map[string]any{"key": key, "txid": row.TxID, "vout": row.Vout, "value": row.Value, "scriptHex": row.ScriptHex, "status": row.Status, "height": row.Height, "source": row.Source, "occupiedBy": occupied, "used": row.Used})
+		all = append(all, map[string]any{"key": key, "txid": row.TxID, "vout": row.Vout, "value": row.Value, "scriptHex": row.ScriptHex, "status": row.Status, "height": row.Height, "source": row.Source, "occupiedBy": occupied})
 	}
-	unavailable, accepted := []string{}, []string{}
+	unavailable, injected := []string{}, []string{}
 	for key := range k.unavailable {
 		unavailable = append(unavailable, key)
 	}
-	for key := range k.accepted {
-		accepted = append(accepted, key)
+	for key := range k.injected {
+		injected = append(injected, key)
 	}
 	sort.Strings(unavailable)
-	sort.Strings(accepted)
-	return map[string]any{"balance": funds.AvailableSats, "funds": funds, "available": available, "allocations": allocations, "internal": map[string]any{"utxos": all, "unavailable": unavailable, "accepted": accepted, "generation": k.generation, "revision": k.revision}}
+	sort.Strings(injected)
+	return map[string]any{"balance": funds.AvailableSats, "funds": funds, "available": available, "allocations": allocations, "internal": map[string]any{"utxos": all, "unavailable": unavailable, "injected": injected, "generation": k.generation, "revision": k.revision}}
 }

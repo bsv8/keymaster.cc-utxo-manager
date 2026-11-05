@@ -8,4 +8,4 @@ export { parseTx, buildUnsigned, assembleSigned, estimateSignedSize, encodeVarin
 export type { TxInput, TxOutput, ParsedTx, UnsignedTemplate } from "./txcodec.js";
 export { sha256, dsha256, bytesToHex, hexToBytes, calcTxid } from "./hash.js";
 export { FundingKernel } from "./kernel.js";
-export type { AcceptedTransaction, Scope, ManagerConfig, SnapshotUtxo, SnapshotInput, RequestInput, RequestAllInput, AllocationView, AllocationMaterial, AllAllocationMaterial, Funds } from "./kernel.js";
+export type { P2pkhUtxo, Scope, ManagerConfig, SnapshotUtxo, SnapshotInput, RequestInput, RequestAllInput, AllocationView, AllocationMaterial, AllAllocationMaterial, Funds } from "./kernel.js";

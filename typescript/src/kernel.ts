@@ -12,24 +12,20 @@ export interface SnapshotUtxo {
   status: "confirmed" | "unconfirmed"; height: number;
 }
 export interface SnapshotInput { generation: number; revision: number; utxos: SnapshotUtxo[] }
-export interface AcceptedTransaction {
-  txid: string;
-  spentOutpoints: string[];
-  outputs: Array<{ vout: number; value: string; scriptHex: string }>;
-}
+export interface P2pkhUtxo { txid: string; vout: number; value: string }
 export interface RequestInput {
   requestId: string; businessAmountSats: string; feeRateSatPerKb: string;
   outputs: Array<{ scriptHex: string; value: string }>;
 }
 export interface AllocationView {
-  allocationId: string; state: "held" | "used" | "released"; inputs: string[];
+  allocationId: string; state: "held" | "released"; inputs: string[];
   businessSats: string; feeSats: string; changeSats: string; totalInSats: string;
 }
 export interface AllocationMaterial { allocation: AllocationView; inputs: SnapshotUtxo[] }
 export interface RequestAllInput { requestId: string }
 export interface AllAllocationMaterial { allocationId: string; inputs: SnapshotUtxo[]; totalInSats: string }
-export interface Funds { availableSats: string; frozenSats: string; version: number }
-interface PoolUtxo extends SnapshotUtxo { source: "woc" | "local"; occupiedBy: string | null; used: boolean }
+export interface Funds { availableSats: string; version: number }
+interface PoolUtxo extends SnapshotUtxo { source: "woc" | "local"; occupiedBy: string | null }
 const keyOf = (row: Pick<SnapshotUtxo, "txid" | "vout">) => `${row.txid.toLowerCase()}:${row.vout}`;
 
 export class FundingKernel {
@@ -37,7 +33,8 @@ export class FundingKernel {
   private allocations = new Map<string, AllocationView>();
   // Includes inputs absent from a later snapshot; stale WoC must not revive them.
   private unavailable = new Set<string>();
-  private accepted = new Set<string>();
+  // Injection deduplication survives removal from the current pool.
+  private injected = new Set<string>();
   private generation = 0;
   private revision = 0;
   private fundsVersion = 0;
@@ -54,7 +51,7 @@ export class FundingKernel {
       const prior = this.utxos.get(key);
       if (this.unavailable.has(key)) continue;
       if (!prior) added++;
-      this.utxos.set(key, { ...row, txid: row.txid.toLowerCase(), source: "woc", occupiedBy: null, used: false });
+      this.utxos.set(key, { ...row, txid: row.txid.toLowerCase(), scriptHex: this.config.walletScriptHex, source: "woc", occupiedBy: null });
     }
     for (const [key, row] of this.utxos) {
       if (row.source === "woc" && !this.unavailable.has(key) && !incoming.has(key)) {
@@ -114,46 +111,35 @@ export class FundingKernel {
     const allocation = this.allocations.get(allocationId);
     if (!allocation) throw new UtmError("allocation-unknown");
     if (allocation.state === "released") return;
-    if (allocation.state === "used") throw new UtmError("allocation-state", "successful inputs are already used");
     for (const key of allocation.inputs) {
       const row = this.utxos.get(key);
-      if (row?.occupiedBy === allocationId && !row.used) { row.occupiedBy = null; this.unavailable.delete(key); }
+      if (row?.occupiedBy === allocationId) { row.occupiedBy = null; this.unavailable.delete(key); }
     }
     allocation.state = "released";
     this.fundsVersion++;
   }
 
-  /** Caller confirms successful submission. Every caller must invoke this for
-   * every successful transaction, including protocol payouts and already-known.
-   * The trusted caller supplies prevouts and outputs, never transaction bytes. */
-  acceptTransaction(tx: AcceptedTransaction): void {
-    const txid = tx.txid.toLowerCase();
-    if (this.accepted.has(txid)) return;
+  /** Inject immediately allocatable P2PKH outputs. The caller guarantees wallet
+   * ownership and spendability; no script or transaction-result checks live here.
+   * Input locks are unchanged. Successful allocations must not be released. */
+  injectP2pkhUtxos(outputs: readonly P2pkhUtxo[]): void {
+    // Validate the entire batch before changing either money or deduplication.
+    // This is amount arithmetic, not script ownership or transaction validation.
+    for (const output of outputs) parseAmount(output.value);
     const before = this.fundsIdentity();
-    for (const input of tx.spentOutpoints) {
-      const key = input.toLowerCase(); this.unavailable.add(key);
-      const row = this.utxos.get(key);
-      if (row) {
-        row.used = true;
-        if (row.occupiedBy) {
-          const allocation = this.allocations.get(row.occupiedBy);
-          if (allocation) allocation.state = "used";
-        }
-      }
+    for (const output of outputs) {
+      if (output.value === "0") continue;
+      const key = keyOf(output);
+      if (this.injected.has(key)) continue;
+      this.injected.add(key);
+      if (this.unavailable.has(key) || this.utxos.has(key)) continue;
+      this.utxos.set(key, { ...output, txid: output.txid.toLowerCase(), scriptHex: this.config.walletScriptHex,
+        status: "unconfirmed", height: 0, source: "local", occupiedBy: null });
     }
-    this.accepted.add(txid);
-    tx.outputs.forEach(output => {
-      if (output.scriptHex !== this.config.walletScriptHex || BigInt(output.value) === 0n) return;
-      const key = `${txid}:${output.vout}`;
-      if (this.unavailable.has(key)) return;
-      const prior = this.utxos.get(key);
-      this.utxos.set(key, { txid, vout: output.vout, value: output.value, scriptHex: output.scriptHex,
-        status: prior?.status ?? "unconfirmed", height: prior?.height ?? 0, source: prior?.source ?? "local", occupiedBy: null, used: false });
-    });
     if (before !== this.fundsIdentity()) this.fundsVersion++;
   }
   private spendableOutpoints(): string[] {
-    return [...this.utxos].filter(([key, row]) => !this.unavailable.has(key) && row.scriptHex === this.config.walletScriptHex)
+    return [...this.utxos].filter(([key]) => !this.unavailable.has(key))
       .sort(([a, x], [b, y]) => BigInt(x.value) === BigInt(y.value) ? (a.split(":")[0]! < b.split(":")[0]! ? -1 : a.split(":")[0]! > b.split(":")[0]! ? 1 : Number(a.split(":")[1]) - Number(b.split(":")[1])) : BigInt(x.value) > BigInt(y.value) ? -1 : 1)
       .map(([key]) => key);
   }
@@ -177,19 +163,17 @@ export class FundingKernel {
     if (allocation.state !== "held") throw new UtmError("allocation-state");
   }
   funds(): Funds {
-    let available = 0n, frozen = 0n;
+    let available = 0n;
     for (const [key, row] of this.utxos) {
-      if (row.scriptHex !== this.config.walletScriptHex || row.used) continue;
       if (!this.unavailable.has(key)) available += BigInt(row.value);
-      else if (row.occupiedBy && this.allocations.get(row.occupiedBy)?.state === "held") frozen += BigInt(row.value);
     }
-    return {availableSats: available.toString(), frozenSats: frozen.toString(), version: this.fundsVersion};
+    return {availableSats: available.toString(), version: this.fundsVersion};
   }
   private fundsIdentity(): string {
-    return JSON.stringify([...this.utxos].filter(([, row]) => row.scriptHex === this.config.walletScriptHex)
-      .map(([key, row]) => [key, row.value, this.unavailable.has(key), row.used, row.occupiedBy, row.occupiedBy ? this.allocations.get(row.occupiedBy)?.state : null])
+    return JSON.stringify([...this.utxos]
+      .map(([key, row]) => [key, row.value, this.unavailable.has(key), row.occupiedBy, row.occupiedBy ? this.allocations.get(row.occupiedBy)?.state : null])
       .sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
   }
 }
-traceKernel(FundingKernel.prototype, ["applySnapshot", "request", "requestAll", "release", "acceptTransaction"],
+traceKernel(FundingKernel.prototype, ["applySnapshot", "request", "requestAll", "release", "injectP2pkhUtxos"],
   (pool: FundingKernel) => pool.funds());
