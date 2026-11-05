@@ -113,7 +113,7 @@ func debugLog(event string, details func() any) {
 	sink(DebugEvent{Component: "utxo-manager", Event: event, Details: debugSummary(reflect.ValueOf(details()), "", 0)})
 }
 func (k *FundingKernel) debugState() any {
-	return map[string]any{"available": k.SpendableOutpoints(), "balance": k.SpendableBalance()}
+	return k.Funds()
 }
 func (k *FundingKernel) debugTrace(operation string, input any) func() {
 	if !DebugEnabled() {

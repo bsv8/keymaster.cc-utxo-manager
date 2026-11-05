@@ -13,19 +13,19 @@
 - `applySnapshot` / `ApplySnapshot`：合并完整 WoC 可用集合。
 - `request` / `Request`：按金额/费用选币并立即冻结。
 - `requestAll` / `RequestAll`：仅接收 requestId，同步冻结全部当前可分配钱包输入，返回 allocationId、完整输入材料和 totalInSats；不接收费率或收款脚本，不计算交易费用及输出。
-- `resolveAllocation` / `ResolveAllocation`：一次返回仍为 held 的分配及完整前序输出材料；拒绝已释放或使用的分配，宿主不重建内部占用不变量。
+- `assertAllocationUsable` / `AssertAllocationUsable`：仅检查 held 分配，无返回数据；申请成功一次交付构建所需的输入材料。
 - `release` / `Release`：调用者显式释放分配，不核查错误证明或签名状态。
 - `acceptTransaction` / `AcceptTransaction`：每次成功提交后回填 `{txid, spentOutpoints, outputs[{vout,value,scriptHex}]}`，自有输出立即可分配；重复注入不会复活已取走输出。
-- 查询：可分配余额、UTXO 和分配记录；不接收、解析或缓存交易原文，不提供前序交易原文查询。
+- `funds` / `Funds`：只返回可用金额、冻结金额、实例内资金变更版本；没有公开 lookup、allocationView、resolveAllocation 或 UTXO 枚举，不返回数量或确认状态金额分栏。
 
 本地找零在 WoC 首次报告前保留；报告后交给完整 WoC 观察更新。当前实例已取走的输入不会被旧 WoC 响应复活。实例销毁后全部丢弃，重启不补偿冻结。
 
 钱包输入只通过 request / requestAll 分配，不支持调用者指定输入补冻结。纯协议池输入不创建钱包分配，成功返回钱包的输出仍须回填。
 
-sendAll 先 requestAll，再由业务根据已冻结输入计算费用及无找零收款金额；费用不足、构建或预览保存失败释放原 requestId（即 allocationId），明确未派发／拒绝先封住业务提交再释放，签名或广播未知不释放。requestAll 不返回交易金额／费用／找零，共用内部 AllocationView 的这三个字段置零，不能用来重建业务计划。
+sendAll 先 requestAll，再由业务根据已冻结输入计算费用及无找零收款金额；费用不足、构建或预览保存失败释放原 requestId（即 allocationId），明确未派发／拒绝先封住业务提交再释放，广播前签名错误（含结果未知）取消原提交后释放，迟到签名不得派发；广播未知不释放。requestAll 不返回交易金额／费用／找零，共用内部 AllocationView 的这三个字段置零，不能用来重建业务计划。
 
 业务保存原交易计划与对应 exact 的回执；分配 used 不代表该付款成功。manager 不接收业务提交编号或付款状态。
 
-上述结构化成功回填、request / requestAll 分配入口和分配材料解析尚未发布。当前正式发布：npm `keymaster-utxo-manager@0.2.0`、Go 根标签 `v0.2.0`。钱包和 CLI 精确消费公共版本；源码、候选与正式依赖验收分别运行，不把公共包发布等同于网站或服务已部署。
+本版本的 npm 清单为 `keymaster-utxo-manager@0.3.0`，Go 使用根标签 `v0.3.0`。npm 上传独立执行，是否已公开以 registry 为准。钱包和 CLI 精确消费公共版本；源码、候选与正式依赖验收分别运行，不把公共包发布等同于宿主已切换依赖或网站、服务已部署。
 
 使用说明见各语言目录；当前契约、宿主接入与公共测试只维护在同级工程仓 `BSV8_Engineering/docs/utxo-manager/` 和 `parity/utxo-manager/`。`setDebugSink` / `SetDebugSink` 可开启脱敏内存诊断，诊断不成为资金事实。

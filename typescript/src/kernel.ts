@@ -28,7 +28,8 @@ export interface AllocationView {
 export interface AllocationMaterial { allocation: AllocationView; inputs: SnapshotUtxo[] }
 export interface RequestAllInput { requestId: string }
 export interface AllAllocationMaterial { allocationId: string; inputs: SnapshotUtxo[]; totalInSats: string }
-export interface PoolUtxo extends SnapshotUtxo { source: "woc" | "local"; occupiedBy: string | null; used: boolean }
+export interface Funds { availableSats: string; frozenSats: string; version: number }
+interface PoolUtxo extends SnapshotUtxo { source: "woc" | "local"; occupiedBy: string | null; used: boolean }
 const keyOf = (row: Pick<SnapshotUtxo, "txid" | "vout">) => `${row.txid.toLowerCase()}:${row.vout}`;
 
 export class FundingKernel {
@@ -39,12 +40,14 @@ export class FundingKernel {
   private accepted = new Set<string>();
   private generation = 0;
   private revision = 0;
+  private fundsVersion = 0;
   constructor(readonly scope: Scope, readonly config: ManagerConfig) {}
 
   applySnapshot(input: SnapshotInput): { added: number; removed: number } {
     if (input.generation < this.generation || (input.generation === this.generation && input.revision <= this.revision)) {
       throw new UtmError("snapshot-stale");
     }
+    const before = this.fundsIdentity();
     const incoming = new Map(input.utxos.map(row => [keyOf(row), row]));
     let added = 0, removed = 0;
     for (const [key, row] of incoming) {
@@ -59,10 +62,11 @@ export class FundingKernel {
       }
     }
     this.generation = input.generation; this.revision = input.revision;
+    if (before !== this.fundsIdentity()) this.fundsVersion++;
     return { added, removed };
   }
 
-  request(input: RequestInput): AllocationView {
+  request(input: RequestInput): AllocationMaterial {
     if (this.allocations.has(input.requestId)) throw new UtmError("id-conflict");
     const business = parseAmount(input.businessAmountSats);
     const rate = parseFeeRate(input.feeRateSatPerKb);
@@ -82,7 +86,8 @@ export class FundingKernel {
       }
     }
     if (!covered) throw new UtmError(pool.length ? "insufficient" : "no-utxos");
-    return this.freeze(input.requestId, chosen, business.toString(), fee.toString(), change.toString());
+    const allocation = this.freeze(input.requestId, chosen, business.toString(), fee.toString(), change.toString());
+    return this.allocationMaterial(allocation.allocationId);
   }
 
   /** Freeze every currently available wallet input, without any transaction policy. */
@@ -94,7 +99,7 @@ export class FundingKernel {
     // send-all amount/fee plan. freeze validates the entire sum before mutation.
     const allocation = this.freeze(input.requestId, keys, "0", "0", "0");
     return { allocationId: allocation.allocationId, totalInSats: allocation.totalInSats,
-      inputs: this.resolveAllocation(allocation.allocationId).inputs };
+      inputs: this.allocationMaterial(allocation.allocationId).inputs };
   }
 
   private freeze(id: string, keys: string[], business: string, fee: string, change: string): AllocationView {
@@ -102,6 +107,7 @@ export class FundingKernel {
       feeSats: fee, changeSats: change, totalInSats: keys.reduce((n, key) => addChecked(n, parseAmount(this.utxos.get(key)!.value)), 0n).toString() };
     for (const key of keys) { this.unavailable.add(key); this.utxos.get(key)!.occupiedBy = id; }
     this.allocations.set(id, view);
+    this.fundsVersion++;
     return structuredClone(view);
   }
   release(allocationId: string): void {
@@ -114,6 +120,7 @@ export class FundingKernel {
       if (row?.occupiedBy === allocationId && !row.used) { row.occupiedBy = null; this.unavailable.delete(key); }
     }
     allocation.state = "released";
+    this.fundsVersion++;
   }
 
   /** Caller confirms successful submission. Every caller must invoke this for
@@ -122,6 +129,7 @@ export class FundingKernel {
   acceptTransaction(tx: AcceptedTransaction): void {
     const txid = tx.txid.toLowerCase();
     if (this.accepted.has(txid)) return;
+    const before = this.fundsIdentity();
     for (const input of tx.spentOutpoints) {
       const key = input.toLowerCase(); this.unavailable.add(key);
       const row = this.utxos.get(key);
@@ -142,33 +150,46 @@ export class FundingKernel {
       this.utxos.set(key, { txid, vout: output.vout, value: output.value, scriptHex: output.scriptHex,
         status: prior?.status ?? "unconfirmed", height: prior?.height ?? 0, source: prior?.source ?? "local", occupiedBy: null, used: false });
     });
+    if (before !== this.fundsIdentity()) this.fundsVersion++;
   }
-  spendableOutpoints(): string[] {
+  private spendableOutpoints(): string[] {
     return [...this.utxos].filter(([key, row]) => !this.unavailable.has(key) && row.scriptHex === this.config.walletScriptHex)
       .sort(([a, x], [b, y]) => BigInt(x.value) === BigInt(y.value) ? (a.split(":")[0]! < b.split(":")[0]! ? -1 : a.split(":")[0]! > b.split(":")[0]! ? 1 : Number(a.split(":")[1]) - Number(b.split(":")[1])) : BigInt(x.value) > BigInt(y.value) ? -1 : 1)
       .map(([key]) => key);
   }
-  lookup(outpoint: string): PoolUtxo {
-    const row = this.utxos.get(outpoint.toLowerCase());
-    if (!row) throw new UtmError("unknown-input", outpoint);
-    return { ...row };
-  }
-  allocationView(id: string): AllocationView {
+  private readAllocation(id: string): AllocationView {
     const row = this.allocations.get(id);
     if (!row) throw new UtmError("allocation-unknown", id);
     return structuredClone(row);
   }
-  /** Resolve a live allocation and its trusted signing facts atomically.
-   * Allocation lifetime is decided here, never reconstructed by hosts. */
-  resolveAllocation(id: string): AllocationMaterial {
-    const allocation = this.allocationView(id);
+  /** Internal materialization for successful allocation results only. */
+  private allocationMaterial(id: string): AllocationMaterial {
+    const allocation = this.readAllocation(id);
     if (allocation.state !== "held") throw new UtmError("allocation-state");
     return { allocation, inputs: allocation.inputs.map(key => {
       const {txid, vout, value, scriptHex, status, height} = this.utxos.get(key)!;
       return {txid, vout, value, scriptHex, status, height};
     }) };
   }
-  spendableBalance(): string { return this.spendableOutpoints().reduce((sum, key) => sum + BigInt(this.utxos.get(key)!.value), 0n).toString(); }
+  assertAllocationUsable(id: string): void {
+    const allocation = this.allocations.get(id);
+    if (!allocation) throw new UtmError("allocation-unknown");
+    if (allocation.state !== "held") throw new UtmError("allocation-state");
+  }
+  funds(): Funds {
+    let available = 0n, frozen = 0n;
+    for (const [key, row] of this.utxos) {
+      if (row.scriptHex !== this.config.walletScriptHex || row.used) continue;
+      if (!this.unavailable.has(key)) available += BigInt(row.value);
+      else if (row.occupiedBy && this.allocations.get(row.occupiedBy)?.state === "held") frozen += BigInt(row.value);
+    }
+    return {availableSats: available.toString(), frozenSats: frozen.toString(), version: this.fundsVersion};
+  }
+  private fundsIdentity(): string {
+    return JSON.stringify([...this.utxos].filter(([, row]) => row.scriptHex === this.config.walletScriptHex)
+      .map(([key, row]) => [key, row.value, this.unavailable.has(key), row.used, row.occupiedBy, row.occupiedBy ? this.allocations.get(row.occupiedBy)?.state : null])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+  }
 }
 traceKernel(FundingKernel.prototype, ["applySnapshot", "request", "requestAll", "release", "acceptTransaction"],
-  (pool: FundingKernel) => ({available: pool.spendableOutpoints(), balance: pool.spendableBalance()}));
+  (pool: FundingKernel) => pool.funds());

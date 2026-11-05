@@ -1,6 +1,6 @@
 {
   "name": "keymaster-utxo-manager",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Memory-only UTXO allocation pool for trusted callers. No runtime dependencies.",
   "type": "module",
   "main": "./dist/index.js",

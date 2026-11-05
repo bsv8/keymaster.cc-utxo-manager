@@ -2,6 +2,7 @@
 package utxo
 
 import (
+	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,6 +70,11 @@ type AllAllocationMaterial struct {
 	Inputs       []SnapshotUtxo `json:"inputs"`
 	TotalInSats  string         `json:"totalInSats"`
 }
+type Funds struct {
+	AvailableSats string `json:"availableSats"`
+	FrozenSats    string `json:"frozenSats"`
+	Version       int64  `json:"version"`
+}
 type PoolUtxo struct {
 	SnapshotUtxo
 	Source     string `json:"source"`
@@ -80,14 +86,15 @@ type SnapshotResult struct {
 	Removed int `json:"removed"`
 }
 type FundingKernel struct {
-	scope       Scope
-	config      ManagerConfig
-	utxos       map[string]*PoolUtxo
-	allocations map[string]*AllocationView
-	unavailable map[string]bool
-	accepted    map[string]bool
-	generation  int64
-	revision    int64
+	scope        Scope
+	config       ManagerConfig
+	utxos        map[string]*PoolUtxo
+	allocations  map[string]*AllocationView
+	unavailable  map[string]bool
+	accepted     map[string]bool
+	generation   int64
+	revision     int64
+	fundsVersion int64
 }
 
 func NewFundingKernel(scope Scope, config ManagerConfig) (*FundingKernel, error) {
@@ -102,6 +109,7 @@ func (k *FundingKernel) ApplySnapshot(input SnapshotInput) (SnapshotResult, erro
 	if input.Generation < k.generation || (input.Generation == k.generation && input.Revision <= k.revision) {
 		return result, fail(ErrSnapshotStale, "")
 	}
+	before := k.fundsIdentity()
 	incoming := map[string]SnapshotUtxo{}
 	for _, row := range input.Utxos {
 		incoming[poolKey(row.TxID, row.Vout)] = row
@@ -128,9 +136,19 @@ func (k *FundingKernel) ApplySnapshot(input SnapshotInput) (SnapshotResult, erro
 	}
 	k.generation = input.Generation
 	k.revision = input.Revision
+	if before != k.fundsIdentity() {
+		k.fundsVersion++
+	}
 	return result, nil
 }
-func (k *FundingKernel) Request(input RequestInput) (AllocationView, error) {
+func (k *FundingKernel) Request(input RequestInput) (AllocationMaterial, error) {
+	view, err := k.request(input)
+	if err != nil {
+		return AllocationMaterial{}, err
+	}
+	return k.allocationMaterial(view.AllocationID)
+}
+func (k *FundingKernel) request(input RequestInput) (AllocationView, error) {
 	defer k.debugTrace("request", input)()
 	if _, ok := k.allocations[input.RequestID]; ok {
 		return AllocationView{}, fail(ErrIDConflict, "")
@@ -147,7 +165,7 @@ func (k *FundingKernel) Request(input RequestInput) (AllocationView, error) {
 	if err != nil {
 		return AllocationView{}, err
 	}
-	pool := k.SpendableOutpoints()
+	pool := k.spendableOutpoints()
 	chosen := []string{}
 	lens := []int{}
 	for _, row := range input.Outputs {
@@ -210,7 +228,7 @@ func (k *FundingKernel) RequestAll(input RequestAllInput) (AllAllocationMaterial
 	if _, ok := k.allocations[input.RequestID]; ok {
 		return AllAllocationMaterial{}, fail(ErrIDConflict, "")
 	}
-	keys := k.SpendableOutpoints()
+	keys := k.spendableOutpoints()
 	if len(keys) == 0 {
 		return AllAllocationMaterial{}, fail(ErrNoUTXOs, "")
 	}
@@ -220,7 +238,7 @@ func (k *FundingKernel) RequestAll(input RequestAllInput) (AllAllocationMaterial
 	if err != nil {
 		return AllAllocationMaterial{}, err
 	}
-	material, err := k.ResolveAllocation(allocation.AllocationID)
+	material, err := k.allocationMaterial(allocation.AllocationID)
 	if err != nil {
 		return AllAllocationMaterial{}, err
 	}
@@ -250,6 +268,7 @@ func (k *FundingKernel) freeze(id string, keys []string, business, fee, change s
 	}
 	row := &AllocationView{AllocationID: id, State: "held", Inputs: append([]string{}, keys...), BusinessSats: business, FeeSats: fee, ChangeSats: change, TotalInSats: mustFormat(total)}
 	k.allocations[id] = row
+	k.fundsVersion++
 	return copyAllocation(row), nil
 }
 func (k *FundingKernel) Release(id string) error {
@@ -272,6 +291,7 @@ func (k *FundingKernel) Release(id string) error {
 		}
 	}
 	row.State = "released"
+	k.fundsVersion++
 	return nil
 }
 
@@ -283,6 +303,7 @@ func (k *FundingKernel) AcceptTransaction(tx AcceptedTransaction) error {
 	if k.accepted[txid] {
 		return nil
 	}
+	before := k.fundsIdentity()
 	for _, input := range tx.SpentOutpoints {
 		key := strings.ToLower(input)
 		k.unavailable[key] = true
@@ -311,9 +332,12 @@ func (k *FundingKernel) AcceptTransaction(tx AcceptedTransaction) error {
 		}
 		k.utxos[key] = &PoolUtxo{SnapshotUtxo: SnapshotUtxo{TxID: txid, Vout: output.Vout, Value: output.Value, ScriptHex: output.ScriptHex, Status: status, Height: height}, Source: source}
 	}
+	if before != k.fundsIdentity() {
+		k.fundsVersion++
+	}
 	return nil
 }
-func (k *FundingKernel) SpendableOutpoints() []string {
+func (k *FundingKernel) spendableOutpoints() []string {
 	keys := []string{}
 	for key, row := range k.utxos {
 		if !k.unavailable[key] && row.ScriptHex == k.config.WalletScriptHex {
@@ -334,14 +358,7 @@ func (k *FundingKernel) SpendableOutpoints() []string {
 	})
 	return keys
 }
-func (k *FundingKernel) Lookup(key string) (PoolUtxo, error) {
-	row := k.utxos[strings.ToLower(key)]
-	if row == nil {
-		return PoolUtxo{}, fail(ErrUnknownInput, key)
-	}
-	return *row, nil
-}
-func (k *FundingKernel) AllocationView(id string) (AllocationView, error) {
+func (k *FundingKernel) readAllocation(id string) (AllocationView, error) {
 	row := k.allocations[id]
 	if row == nil {
 		return AllocationView{}, fail(ErrAllocationUnknown, id)
@@ -349,10 +366,10 @@ func (k *FundingKernel) AllocationView(id string) (AllocationView, error) {
 	return copyAllocation(row), nil
 }
 
-// ResolveAllocation returns only live allocation/signing facts. Hosts do not
-// reconstruct allocation lifetime from internal UTXO occupancy fields.
-func (k *FundingKernel) ResolveAllocation(id string) (AllocationMaterial, error) {
-	view, err := k.AllocationView(id)
+// allocationMaterial is internal; signing facts leave the kernel only as
+// part of a successful allocation, never through a general query.
+func (k *FundingKernel) allocationMaterial(id string) (AllocationMaterial, error) {
+	view, err := k.readAllocation(id)
 	if err != nil {
 		return AllocationMaterial{}, err
 	}
@@ -365,11 +382,51 @@ func (k *FundingKernel) ResolveAllocation(id string) (AllocationMaterial, error)
 	}
 	return AllocationMaterial{Allocation: view, Inputs: inputs}, nil
 }
-func (k *FundingKernel) SpendableBalance() string {
-	var total uint64
-	for _, key := range k.SpendableOutpoints() {
-		value, _ := ParseAmount(k.utxos[key].Value)
-		total += value
+func (k *FundingKernel) AssertAllocationUsable(id string) error {
+	row := k.allocations[id]
+	if row == nil {
+		return fail(ErrAllocationUnknown, "")
 	}
-	return mustFormat(total)
+	if row.State != "held" {
+		return fail(ErrAllocationState, "")
+	}
+	return nil
+}
+func (k *FundingKernel) Funds() Funds {
+	var available, frozen uint64
+	for key, row := range k.utxos {
+		if row.ScriptHex != k.config.WalletScriptHex || row.Used {
+			continue
+		}
+		value, _ := ParseAmount(row.Value)
+		if !k.unavailable[key] {
+			available += value
+		} else if a := k.allocations[row.OccupiedBy]; a != nil && a.State == "held" {
+			frozen += value
+		}
+	}
+	return Funds{AvailableSats: mustFormat(available), FrozenSats: mustFormat(frozen), Version: k.fundsVersion}
+}
+func (k *FundingKernel) fundsIdentity() string {
+	keys := []string{}
+	for key, row := range k.utxos {
+		if row.ScriptHex == k.config.WalletScriptHex {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	rows := []any{}
+	for _, key := range keys {
+		row := k.utxos[key]
+		var occupied, state any
+		if row.OccupiedBy != "" {
+			occupied = row.OccupiedBy
+			if a := k.allocations[row.OccupiedBy]; a != nil {
+				state = a.State
+			}
+		}
+		rows = append(rows, []any{key, row.Value, k.unavailable[key], row.Used, occupied, state})
+	}
+	raw, _ := json.Marshal(rows)
+	return string(raw)
 }

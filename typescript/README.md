@@ -1,55 +1,39 @@
 # keymaster-utxo-manager
 
-Memory-only UTXO allocation pool for trusted internal callers. No persistence,
-permission checks, signing, broadcasting, mempool tracking or transaction recovery.
+Memory-only wallet funding for trusted callers. No signing, broadcast, transaction bytes or persistence in the kernel.
 
 ```ts
-import { FundingKernel } from 'keymaster-utxo-manager';
-const pool = new FundingKernel(
-  { owner, network: 'test' },
-  { walletScriptHex, dustThresholdSats: '1' },
-);
-pool.applySnapshot({ generation: 1, revision: 1, utxos });
-const allocation = pool.request({
+const pool = new FundingKernel({owner, network}, {walletScriptHex, dustThresholdSats: '1'});
+pool.applySnapshot({generation: 1, revision: 1, utxos});
+const {allocation, inputs} = pool.request({
   requestId: 'payment', businessAmountSats: '1000', feeRateSatPerKb: '10',
-  outputs: [{ scriptHex: recipientScript, value: '1000' }],
+  outputs: [{scriptHex: recipientScript, value: '1000'}],
 });
-const material = pool.resolveAllocation(allocation.allocationId);
-// Caller keeps the original transaction plan using material.inputs (prevouts),
-// allocation.feeSats and allocation.changeSats, then signs/submits that plan.
-// resolveAllocation rejects released/used allocations; no host occupancy checks.
-// Every successful submission (including already-known and protocol payouts):
-pool.acceptTransaction({
-  txid: successfulTxid,
-  spentOutpoints: allocation.inputs,
-  outputs: [{ vout: changeVout, value: changeSats, scriptHex: walletScriptHex }],
-}); // caller supplies actual successful prevouts/outputs; change is immediately allocatable
-// Explicit transaction rejection: caller may pool.release(allocation.allocationId).
-// Unknown network result: do not release and do not inject unaccepted change.
+// Pass these allocated inputs to the builder; never select externally.
+pool.assertAllocationUsable(allocation.allocationId); // no returned data
+pool.funds(); // {availableSats, frozenSats, version}; no raw UTXO queries
 ```
 
-`request` allocates by funding needs; `requestAll({requestId})` freezes every
-currently available wallet input atomically, including small inputs. It returns
-`{allocationId, inputs: SnapshotUtxo[], totalInSats}` with detached signing facts;
-allocationId is the original requestId. No fee rate, recipient script, amount or
-transaction layout is accepted/computed. Empty pools fail with no-utxos, reused
-IDs with id-conflict; invalid sums fail without partially freezing inputs.
-Callers compute send-all fees/output only after freezing, with no change and no
-second request. Explicit preparation failures release that original ID; unknown
-signing/submission results never release. The shared internal AllocationView's
-business/fee/change fields are zero for requestAll, not a transaction plan.
-Callers never supply selected outpoints. Protocol-only inputs need no wallet allocation; payouts still inject wallet outputs.
-`spendableBalance`, `spendableOutpoints`, `lookup` and `allocationView` are queries.
-`resolveAllocation(id)` returns detached `{allocation, inputs}` for held allocations;
-missing IDs report allocation-unknown, released/used allocations report allocation-state.
-Business payment success comes from that exact transaction's receipt, never from allocation state.
-The pool never accepts, parses or caches transaction bytes. Amounts use decimal strings; fees use sats/KB.
+`requestAll({requestId})` atomically freezes all available inputs and returns
+`{allocationId, inputs, totalInSats}`, without fee/recipient policy. The caller
+calculates send-all fees and a single recipient output without change.
 
-Old WoC responses cannot revive allocated/used inputs. Local outputs survive WoC
-lag until first observed; later complete observations update chain-sourced funds.
-Discard the instance to discard all state. Restart risks are explicitly unmanaged.
+Requests return detached execution materials once. No public lookup,
+allocationView, resolveAllocation or spendable-outpoint enumeration exists.
+Funds queries do not distinguish confirmed/unconfirmed amounts or expose counts.
+The funds version changes with wallet funding facts (including equal-value input
+replacement), not confirmation metadata, and is scoped to the instance.
 
-Build with `npm install && npm run build`. The memory-pool API is published as
-`keymaster-utxo-manager@0.2.0`; the structured success-input, request/requestAll allocation and allocation-material changes above are
-source-only and not yet published. Shared tests/docs belong to the engineering repo;
-source/candidate checks and public-release dependency checks are separate.
+Before broadcast, any construction/signing error (including a missing signature
+result) cancels the original intention and releases its allocation. Late signer
+results must never dispatch. Explicit non-dispatch/rejection also releases;
+unknown broadcast results never release. Every success/already-known injects
+`acceptTransaction({txid, spentOutpoints, outputs})`; spent inputs never return.
+Protocol-only inputs need no wallet allocation; their returned wallet outputs
+still enter through successful receipts. Discarding the instance discards state;
+there is no restoration/compensation from caller journals.
+
+Package version: 0.3.0. Typecheck/build with TypeScript using tsconfig.json.
+Public registry availability and host dependency adoption are separate from the
+package version. Shared docs and parity belong to the engineering repo.
+Production must not compile verification-only observers.

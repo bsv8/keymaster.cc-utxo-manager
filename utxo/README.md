@@ -1,46 +1,25 @@
 # Go memory UTXO pool
 
-```go
-import "github.com/bsv8/keymaster.cc-utxo-manager/utxo"
+Import `github.com/bsv8/keymaster.cc-utxo-manager/utxo`.
 
-pool, _ := utxo.NewFundingKernel(
-    utxo.Scope{Owner: owner, Network: "test"},
-    utxo.ManagerConfig{WalletScriptHex: walletScript, DustThresholdSats: "1"},
-)
-// ApplySnapshot: complete WoC available UTXOs.
-// Request: select and freeze inputs by funding needs.
-// RequestAll(RequestAllInput{RequestID: id}): freeze all available wallet inputs.
-// Returns AllAllocationMaterial{AllocationID, Inputs, TotalInSats}; no fee/recipient policy.
-// Caller computes send-all fees/output from frozen inputs, with no change or second request.
-// Preparation failures release the original ID; unknown signing/submission results do not.
-// Protocol-only inputs need no wallet allocation; successful payouts still inject outputs.
-// ResolveAllocation(id): detached held allocation + prevouts, including amount/script.
-// Released/used allocations fail; hosts do not recheck internal occupancy fields.
-// Caller retains the original fee/change plan and constructs/signs/submits it.
-// Allocation state is not a payment-success receipt.
-// On EVERY successful submission (including already-known/payout):
-err := pool.AcceptTransaction(utxo.AcceptedTransaction{
-    TxID: successfulTxid,
-    SpentOutpoints: actualSpentOutpoints,
-    Outputs: []utxo.AcceptedOutput{{Vout: changeVout, Value: changeSats, ScriptHex: walletScript}},
-})
-// Caller explicitly releases rejected submissions with pool.Release(id).
-// Unknown network results never release inputs or enable change.
-```
+- `Request`: select and freeze atomically; return `AllocationMaterial{Allocation, Inputs}` to the builder.
+- `RequestAll`: freeze all available wallet inputs, return ID, signing facts and total; no fee/recipient policy.
+- `Funds`: business-only `AvailableSats / FrozenSats / Version`; no UTXOs, counts or confirmation amount categories.
+- `AssertAllocationUsable`: check held allocation without returning data.
+- `Release`: explicit caller release, idempotent for released records, refuses successfully used inputs.
+- `ApplySnapshot`: merge complete observations; stale observations cannot revive allocated/used inputs.
+- `AcceptTransaction`: trusted structured successful inputs/outputs; own outputs immediately available, idempotent by txid.
 
-RequestAll includes small inputs but excludes held/used and non-wallet inputs.
-Empty pools fail with no-utxos, reused IDs with id-conflict; invalid sums fail
-without partial freezing. Returned input facts are detached. Its shared internal
-AllocationView has zero business/fee/change fields, not a transaction plan.
+No public Lookup, AllocationView method, ResolveAllocation or outpoint enumeration.
+The AllocationView data type remains part of the request result, not a query.
+Callers serialize access and own construction, signing, submission and evidence.
+Any pre-broadcast error, including signing-result loss, cancels the original
+intention before release; late signer results cannot dispatch. Explicit rejection
+releases; broadcast uncertainty does not. Successful pool funding cannot release
+its original wallet inputs: only protocol close/refund/arbitration may recover funds.
 
-State is memory-only, not thread-safe: callers serialize access. There are no
-permission, signature-validation, broadcast, mempool, conflict-observation or
-persistence/recovery APIs. Queries expose available UTXOs/balance, allocation
-records. No transaction bytes are accepted, parsed or cached. Discarding an instance discards
-all state; restart risks are intentionally unmanaged.
-
-Build: `go build ./...`. Uses only the standard library. TS and Go share the same
-allocation contract; tests and current docs live in the engineering repo. This
-memory-pool API is published at the root module tag `v0.2.0`; the structured
-success-input, request/requestAll allocation and allocation-material changes above are not yet published. Source/candidate
-checks do not substitute for public-release dependency checks.
+State is memory-only; restart does not restore wallet locks. Funds versions are
+instance-local. Build with `go build ./...` (standard library only). The
+`utmparity` build tag exists exclusively for full-state cross-language verification,
+not production. This API belongs to root-module tag v0.3.0; host adoption and
+npm publication are separate.
